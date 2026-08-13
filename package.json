@@ -1,0 +1,28 @@
+{
+  "name": "wynncrafters",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A static Wynncraft recipe finder for GitHub Pages.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "cache:wynncraft": "node scripts/update-wynncraft-cache.mjs",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.468.0",
+    "next": "16.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.10",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "eslint": "^9.34.0",
+    "eslint-config-next": "16.3.0",
+    "playwright": "^1.62.1",
+    "typescript": "^5.9.2"
+  }
+}
