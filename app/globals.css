@@ -110,6 +110,7 @@ button {
 
 select,
 input[type="number"],
+.levelPair input,
 .inputWithIcon input,
 textarea {
   width: 100%;

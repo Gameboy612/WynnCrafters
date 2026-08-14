@@ -1396,7 +1396,7 @@ function SidebarFilters({
   setMaxLevel: (level: number) => void;
   preferences: SolverPreferences;
   setPreferences: (preferences: SolverPreferences) => void;
-  onSearch: () => void;
+  onSearch: (minLevel: number, maxLevel: number) => void;
   hasPendingChanges: boolean;
 }) {
   const recipeTypes = getRecipeTypes(recipes, profession);
@@ -1407,6 +1407,32 @@ function SidebarFilters({
   const [targetIdQuery, setTargetIdQuery] = useState("");
   const [avoidIdQuery, setAvoidIdQuery] = useState("");
   const [avoidIdsOpen, setAvoidIdsOpen] = useState(false);
+  const [minLevelInput, setMinLevelInput] = useState(String(minLevel));
+  const [maxLevelInput, setMaxLevelInput] = useState(String(maxLevel));
+
+  useEffect(() => {
+    setMinLevelInput(String(minLevel));
+  }, [minLevel]);
+
+  useEffect(() => {
+    setMaxLevelInput(String(maxLevel));
+  }, [maxLevel]);
+
+  const normalizeLevel = (value: string, fallback: number) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    return Math.min(120, Math.max(1, Math.trunc(parsed)));
+  };
+
+  const submitSearch = () => {
+    const nextMinLevel = normalizeLevel(minLevelInput, minLevel);
+    const nextMaxLevel = normalizeLevel(maxLevelInput, maxLevel);
+    setMinLevelInput(String(nextMinLevel));
+    setMaxLevelInput(String(nextMaxLevel));
+    setMinLevel(nextMinLevel);
+    setMaxLevel(nextMaxLevel);
+    onSearch(nextMinLevel, nextMaxLevel);
+  };
 
   const matchingIds = (query: string) => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -1483,22 +1509,22 @@ function SidebarFilters({
           <label htmlFor="min-level">Min level</label>
           <input
             id="min-level"
-            type="number"
-            min={1}
-            max={120}
-            value={minLevel}
-            onChange={(event) => setMinLevel(Number(event.target.value))}
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={minLevelInput}
+            onChange={(event) => setMinLevelInput(event.target.value)}
           />
         </div>
         <div className="controlGroup">
           <label htmlFor="max-level">Max level</label>
           <input
             id="max-level"
-            type="number"
-            min={1}
-            max={120}
-            value={maxLevel}
-            onChange={(event) => setMaxLevel(Number(event.target.value))}
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            value={maxLevelInput}
+            onChange={(event) => setMaxLevelInput(event.target.value)}
           />
         </div>
       </div>
@@ -1642,8 +1668,14 @@ function SidebarFilters({
 
       <button
         type="button"
-        className={clsx("searchButton", hasPendingChanges && "searchButtonPending")}
-        onClick={onSearch}
+        className={clsx(
+          "searchButton",
+          (hasPendingChanges ||
+            minLevelInput !== String(minLevel) ||
+            maxLevelInput !== String(maxLevel)) &&
+            "searchButtonPending"
+        )}
+        onClick={submitSearch}
       >
         <Search size={17} />
         Search recipes
@@ -1780,11 +1812,13 @@ export default function WynncrafterApp() {
     ]
   );
 
-  const applySearch = () => {
+  const applySearch = (minLevel = draftMinLevel, maxLevel = draftMaxLevel) => {
+    setDraftMinLevel(minLevel);
+    setDraftMaxLevel(maxLevel);
     setSearchedProfession(draftProfession);
     setSearchedCraftedType(draftCraftedType);
-    setSearchedMinLevel(draftMinLevel);
-    setSearchedMaxLevel(draftMaxLevel);
+    setSearchedMinLevel(minLevel);
+    setSearchedMaxLevel(maxLevel);
     setSearchedPreferences(draftPreferences);
     setSelectedRecipe(null);
   };
