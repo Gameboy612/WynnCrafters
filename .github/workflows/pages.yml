@@ -37,6 +37,10 @@ jobs:
         run: npm run cache:wynncraft
 
       - name: Build static export
+        env:
+          # This repository uses a custom GitHub Pages domain, so the app is served
+          # from the domain root rather than /<repository-name>/.
+          NEXT_PUBLIC_BASE_PATH: ""
         run: npm run build
 
       - name: Upload Pages artifact
