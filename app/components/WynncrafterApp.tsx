@@ -3,6 +3,7 @@
 import {
   AlertCircle,
   ArrowDownUp,
+  ChevronRight,
   FlaskConical,
   Gem,
   Hammer,
@@ -21,6 +22,7 @@ import { useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 import {
   FRIENDLY_ID_NAMES,
+  MAX_INGREDIENT_POOL_SIZE,
   NumericRange,
   PROFESSIONS,
   Profession,
@@ -51,12 +53,12 @@ const professionIcons: Record<Profession, typeof Hammer> = {
 };
 
 const defaultTargets: string[] = [];
-const defaultAvoids = ["poison"];
+const defaultAvoids: string[] = [];
 
 const defaultPreferences: SolverPreferences = {
   targetIds: defaultTargets,
   avoidIds: defaultAvoids,
-  maxIngredients: 10,
+  maxIngredients: MAX_INGREDIENT_POOL_SIZE,
   includeTradeoffs: true,
   ingredientQuery: "",
   bannedIngredients: "",
@@ -64,6 +66,21 @@ const defaultPreferences: SolverPreferences = {
   minDuration: 60,
   minCharges: 0
 };
+
+const professionCodes: Record<Profession, string> = {
+  armouring: "a",
+  tailoring: "t",
+  weaponsmithing: "w",
+  woodworking: "o",
+  jeweling: "j",
+  cooking: "c",
+  alchemism: "l",
+  scribing: "s"
+};
+
+const professionsByCode = Object.fromEntries(
+  Object.entries(professionCodes).map(([profession, code]) => [code, profession])
+) as Record<string, Profession>;
 
 type SharedSearchState = {
   profession: Profession;
@@ -92,18 +109,88 @@ const normalizePreferences = (value: Partial<SolverPreferences> = {}): SolverPre
   ...value,
   targetIds: Array.isArray(value.targetIds) ? value.targetIds : defaultTargets,
   avoidIds: Array.isArray(value.avoidIds) ? value.avoidIds : defaultAvoids,
-  maxIngredients: Number(value.maxIngredients ?? defaultPreferences.maxIngredients),
+  maxIngredients: MAX_INGREDIENT_POOL_SIZE,
   minDurability: Number(value.minDurability ?? defaultPreferences.minDurability),
   minDuration: Number(value.minDuration ?? defaultPreferences.minDuration),
   minCharges: Number(value.minCharges ?? defaultPreferences.minCharges)
 });
 
+const compactStateFields = (state: SharedSearchState) => {
+  const { preferences } = state;
+  const fields = [
+    professionCodes[state.profession],
+    state.craftedType,
+    state.minLevel === 1 ? "" : String(state.minLevel),
+    state.maxLevel === 120 ? "" : String(state.maxLevel),
+    preferences.targetIds.join(","),
+    preferences.avoidIds.join(","),
+    preferences.includeTradeoffs ? "" : "0",
+    preferences.ingredientQuery,
+    preferences.bannedIngredients,
+    preferences.minDurability === defaultPreferences.minDurability
+      ? ""
+      : String(preferences.minDurability),
+    preferences.minDuration === defaultPreferences.minDuration
+      ? ""
+      : String(preferences.minDuration),
+    preferences.minCharges === defaultPreferences.minCharges
+      ? ""
+      : String(preferences.minCharges)
+  ];
+
+  while (fields.length > 0 && fields[fields.length - 1] === "") {
+    fields.pop();
+  }
+
+  return fields.map((field) => encodeURIComponent(field));
+};
+
 const encodeSharedState = (state: SharedSearchState) =>
-  encodeBase64Url(JSON.stringify(state));
+  encodeBase64Url(`1~${compactStateFields(state).join("~")}`);
+
+const numberOrDefault = (value: string | undefined, fallback: number) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+};
+
+const splitIds = (value: string | undefined) =>
+  value ? value.split(",").filter(Boolean) : [];
+
+const decodeCompactSharedState = (value: string): SharedSearchState | null => {
+  const [version, ...encodedFields] = value.split("~");
+  if (version !== "1") return null;
+
+  const fields = encodedFields.map((field) => decodeURIComponent(field));
+  const profession = professionsByCode[fields[0] ?? ""];
+  if (!profession) return null;
+
+  return {
+    profession,
+    craftedType: fields[1] ?? "",
+    minLevel: numberOrDefault(fields[2], 1),
+    maxLevel: numberOrDefault(fields[3], 120),
+    preferences: normalizePreferences({
+      targetIds: splitIds(fields[4]),
+      avoidIds: splitIds(fields[5]),
+      includeTradeoffs: fields[6] !== "0",
+      ingredientQuery: fields[7] ?? "",
+      bannedIngredients: fields[8] ?? "",
+      minDurability: numberOrDefault(
+        fields[9],
+        defaultPreferences.minDurability
+      ),
+      minDuration: numberOrDefault(fields[10], defaultPreferences.minDuration),
+      minCharges: numberOrDefault(fields[11], defaultPreferences.minCharges)
+    })
+  };
+};
 
 const decodeSharedState = (value: string): SharedSearchState | null => {
   try {
-    const parsed = JSON.parse(decodeBase64Url(value)) as Partial<SharedSearchState>;
+    const decoded = decodeBase64Url(value);
+    if (decoded.startsWith("1~")) return decodeCompactSharedState(decoded);
+
+    const parsed = JSON.parse(decoded) as Partial<SharedSearchState>;
     if (!parsed.profession || !PROFESSIONS.includes(parsed.profession)) return null;
     return {
       profession: parsed.profession,
@@ -399,6 +486,25 @@ const craftResultKey = (craft: SolvedCraft) =>
     craft.chargesDelta
   ].join("|");
 
+const craftSelectionKey = (craft: SolvedCraft) => {
+  const ingredientIndexes = new Map<string, number>();
+  const ingredientNames: string[] = [];
+  const slots = craft.grid
+    .map((ingredient) => {
+      if (!ingredient) return ".";
+      let index = ingredientIndexes.get(ingredient.internalName);
+      if (index === undefined) {
+        index = ingredientNames.length;
+        ingredientIndexes.set(ingredient.internalName, index);
+        ingredientNames.push(ingredient.internalName);
+      }
+      return String.fromCharCode(65 + index);
+    })
+    .join("");
+
+  return [craft.recipe.internalName, slots, ...ingredientNames].join("|");
+};
+
 const craftDedupeKey = (craft: SolvedCraft) =>
   [
     craft.recipe.type,
@@ -529,6 +635,41 @@ function SelectablePill({
     >
       {label}
     </button>
+  );
+}
+
+function CollapsibleSection({
+  label,
+  itemCount,
+  open,
+  onToggle,
+  children
+}: {
+  label: string;
+  itemCount?: number;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="idPicker">
+      <button
+        type="button"
+        className="collapsibleToggle"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        <span>
+          {label}
+          {itemCount ? ` (${itemCount})` : ""}
+        </span>
+        <ChevronRight
+          size={16}
+          className={clsx("collapsibleChevron", open && "collapsibleChevronOpen")}
+        />
+      </button>
+      {open && <div className="collapsibleContent">{children}</div>}
+    </div>
   );
 }
 
@@ -677,12 +818,12 @@ function ResultsList({
       {results.map((result) => (
         <button
           type="button"
-          key={craftResultKey(result)}
+          key={craftSelectionKey(result)}
           className={clsx(
             "resultCard",
-            selected === craftResultKey(result) && "resultCardSelected"
+            selected === craftSelectionKey(result) && "resultCardSelected"
           )}
-          onClick={() => onSelect(craftResultKey(result))}
+          onClick={() => onSelect(craftSelectionKey(result))}
         >
           <div>
             <span className="resultType">{titleCase(result.recipe.type)}</span>
@@ -1031,6 +1172,21 @@ function SidebarFilters({
   const showDurabilityMinimum = professionSupportsDurability(recipes, profession);
   const showDurationMinimum = professionSupportsDuration(recipes, profession);
   const showChargesMinimum = professionSupportsConsumableStats(recipes, profession);
+  const [targetIdQuery, setTargetIdQuery] = useState("");
+  const [avoidIdQuery, setAvoidIdQuery] = useState("");
+  const [avoidIdsOpen, setAvoidIdsOpen] = useState(false);
+
+  const matchingIds = (query: string) => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return knownIds;
+    return knownIds.filter((id) => {
+      const label = idLabel(id).toLowerCase();
+      return label.includes(normalizedQuery) || id.toLowerCase().includes(normalizedQuery);
+    });
+  };
+
+  const targetIdOptions = matchingIds(targetIdQuery);
+  const avoidIdOptions = matchingIds(avoidIdQuery);
 
   const toggleId = (kind: "targetIds" | "avoidIds", id: string) => {
     const values = preferences[kind];
@@ -1176,21 +1332,6 @@ function SidebarFilters({
         </div>
       )}
 
-      <div className="controlGroup">
-        <label htmlFor="max-ingredients">Ingredient pool</label>
-        <input
-          id="max-ingredients"
-          type="range"
-          min={2}
-          max={18}
-          value={preferences.maxIngredients}
-          onChange={(event) =>
-            setPreferences({ ...preferences, maxIngredients: Number(event.target.value) })
-          }
-        />
-        <span className="rangeReadout">{preferences.maxIngredients} strongest candidates</span>
-      </div>
-
       <label className="toggleRow">
         <input
           type="checkbox"
@@ -1207,10 +1348,19 @@ function SidebarFilters({
           <span>Target IDs</span>
           <ArrowDownUp size={15} />
         </div>
+        <div className="inputWithIcon">
+          <Search size={15} />
+          <input
+            value={targetIdQuery}
+            onChange={(event) => setTargetIdQuery(event.target.value)}
+            placeholder="Search IDs..."
+            aria-label="Search target IDs"
+          />
+        </div>
         <div className="pillWrap">
-          {knownIds
+          {targetIdOptions
             .filter((id) => defaultTargets.includes(id) || FRIENDLY_ID_NAMES[id])
-            .slice(0, 34)
+            .slice(0, targetIdQuery.trim() ? undefined : 34)
             .map((id) => (
               <SelectablePill
                 key={id}
@@ -1222,25 +1372,41 @@ function SidebarFilters({
         </div>
       </div>
 
-      <div className="idPicker">
-        <div className="idPickerHeader">
-          <span>Avoid IDs</span>
-          <AlertCircle size={15} />
-        </div>
-        <div className="pillWrap compact">
-          {knownIds
-            .filter((id) => defaultAvoids.includes(id) || FRIENDLY_ID_NAMES[id])
-            .slice(0, 26)
-            .map((id) => (
-              <SelectablePill
-                key={id}
-                label={idLabel(id)}
-                selected={preferences.avoidIds.includes(id)}
-                onClick={() => toggleId("avoidIds", id)}
+      <CollapsibleSection
+        label="Avoid IDs"
+        itemCount={preferences.avoidIds.length}
+        open={avoidIdsOpen}
+        onToggle={() => setAvoidIdsOpen((open) => !open)}
+      >
+        <div className="idPickerContent">
+          {avoidIdsOpen && (
+          <>
+            <div className="inputWithIcon">
+              <Search size={15} />
+              <input
+                value={avoidIdQuery}
+                onChange={(event) => setAvoidIdQuery(event.target.value)}
+                placeholder="Search IDs..."
+                aria-label="Search avoid IDs"
               />
-          ))}
+            </div>
+            <div className="pillWrap compact">
+              {avoidIdOptions
+                .filter((id) => defaultAvoids.includes(id) || FRIENDLY_ID_NAMES[id])
+                .slice(0, avoidIdQuery.trim() ? undefined : 26)
+                .map((id) => (
+                  <SelectablePill
+                    key={id}
+                    label={idLabel(id)}
+                    selected={preferences.avoidIds.includes(id)}
+                    onClick={() => toggleId("avoidIds", id)}
+                  />
+                ))}
+            </div>
+          </>
+          )}
         </div>
-      </div>
+      </CollapsibleSection>
 
       <button
         type="button"
@@ -1411,14 +1577,18 @@ export default function WynncrafterApp() {
   const selectedCraft = useMemo(() => {
     if (!solvedRecipes.length) return null;
     return (
-      solvedRecipes.find((result) => craftResultKey(result) === selectedRecipe) ??
+      solvedRecipes.find(
+        (result) =>
+          craftSelectionKey(result) === selectedRecipe ||
+          craftResultKey(result) === selectedRecipe
+      ) ??
       solvedRecipes[0]
     );
   }, [selectedRecipe, solvedRecipes]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !urlHydrated) return;
-    const selectedKey = selectedCraft ? craftResultKey(selectedCraft) : selectedRecipe;
+    const selectedKey = selectedCraft ? craftSelectionKey(selectedCraft) : selectedRecipe;
     const state: SharedSearchState = {
       profession: searchedProfession,
       craftedType: searchedCraftedType,
@@ -1512,7 +1682,7 @@ export default function WynncrafterApp() {
               </div>
               <ResultsList
                 results={solvedRecipes}
-                selected={selectedCraft ? craftResultKey(selectedCraft) : null}
+                selected={selectedCraft ? craftSelectionKey(selectedCraft) : null}
                 onSelect={setSelectedRecipe}
               />
             </section>

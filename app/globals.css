@@ -267,15 +267,6 @@ textarea {
   opacity: 0.42;
 }
 
-input[type="range"] {
-  accent-color: var(--teal);
-}
-
-.rangeReadout {
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
 .toggleRow {
   display: flex;
   align-items: flex-start;
@@ -336,6 +327,37 @@ input[type="range"] {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.collapsibleToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 0;
+  font: inherit;
+  font-weight: 900;
+  cursor: pointer;
+  text-align: left;
+}
+
+.collapsibleChevron {
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.collapsibleChevronOpen {
+  transform: rotate(90deg);
+}
+
+.collapsibleContent,
+.idPickerContent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .pillWrap {

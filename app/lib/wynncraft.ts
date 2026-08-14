@@ -13,6 +13,7 @@ export const PROFESSIONS = [
 ] as const;
 
 export type Profession = (typeof PROFESSIONS)[number];
+export const MAX_INGREDIENT_POOL_SIZE = 18;
 
 export type RangeValue = {
   minimum?: number;
@@ -751,7 +752,7 @@ const candidateLayouts = (
   preferences: SolverPreferences,
   idBaselines: Record<string, number>
 ) => {
-  const requestedPoolSize = Math.max(1, preferences.maxIngredients);
+  const requestedPoolSize = MAX_INGREDIENT_POOL_SIZE;
   const pool = uniqueIngredients([
     ...seedIngredients,
     ...targetIngredients
@@ -1008,7 +1009,7 @@ export const solveRecipe = (
           ingredientPower(recipe, a, preferences.targetIds, preferences.avoidIds, idBaselines) ||
         modifierPower(b) - modifierPower(a)
     )
-    .slice(0, Math.max(1, preferences.maxIngredients));
+    .slice(0, MAX_INGREDIENT_POOL_SIZE);
   const boosterPool = compatibleItems
     .filter((ingredient) => modifierPower(ingredient) > 0)
     .sort(
