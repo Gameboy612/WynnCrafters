@@ -1,5 +1,6 @@
 export const WYNNCRAFT_API = "https://api.wynncraft.com/v3";
 export const WYNNCRAFT_CACHE = "./data/wynncraft-cache.json";
+export const WYNNVENTORY_PRICE_CACHE = "./data/wynnventory-prices.json";
 
 export const PROFESSIONS = [
   "armouring",
@@ -103,7 +104,26 @@ type WynncraftCache = {
   utilityIngredients?: WynncraftIngredient[];
 };
 
+export type WynnventoryPrice = {
+  price: number;
+  sampledAt: string;
+};
+
+export type WynnventoryPriceCache = {
+  generatedAt: string | null;
+  source: string;
+  range: {
+    startDate: string;
+    endDate: string;
+  } | null;
+  pricing: string;
+  prices: Record<string, WynnventoryPrice>;
+  unavailable: string[];
+  failures: string[];
+};
+
 let cachePromise: Promise<WynncraftCache | null> | null = null;
+let marketPriceCachePromise: Promise<WynnventoryPriceCache | null> | null = null;
 
 const fetchCache = () => {
   if (!cachePromise) {
@@ -112,6 +132,15 @@ const fetchCache = () => {
       .catch(() => null);
   }
   return cachePromise;
+};
+
+export const fetchMarketPriceCache = () => {
+  if (!marketPriceCachePromise) {
+    marketPriceCachePromise = fetch(WYNNVENTORY_PRICE_CACHE)
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null);
+  }
+  return marketPriceCachePromise;
 };
 
 export type RecipeSearchInput = {

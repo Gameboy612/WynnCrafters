@@ -3,6 +3,7 @@ name: Refresh Wynncraft data cache
 on:
   schedule:
     - cron: "17 3 */14 * *"
+    - cron: "29 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -24,11 +25,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Refresh cache
+      - name: Refresh Wynncraft data cache
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 3 */14 * *'
         run: npm run cache:wynncraft
+
+      - name: Refresh weekly market price cache
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '29 3 * * 1'
+        run: npm run cache:wynnventory
 
       - name: Commit cache update
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: refresh Wynncraft data cache"
-          file_pattern: public/data/wynncraft-cache.json
+          commit_message: "chore: refresh Wynncraft and market data caches"
+          file_pattern: public/data/wynncraft-cache.json public/data/wynnventory-prices.json

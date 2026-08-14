@@ -32,7 +32,9 @@ import {
   SolverPreferences,
   WynncraftIngredient,
   WynncraftRecipe,
+  WynnventoryPriceCache,
   fetchIngredientData,
+  fetchMarketPriceCache,
   fetchRecipes,
   idLabel,
   identificationRange,
@@ -260,6 +262,37 @@ const formatNumber = (value: number, digits = 0) =>
     maximumFractionDigits: digits,
     minimumFractionDigits: 0
   }).format(value);
+
+type CraftCostInput = {
+  name: string;
+  amount: number;
+  marketKey: string;
+};
+
+const craftCostInputs = (craft: SolvedCraft): CraftCostInput[] => {
+  const inputs = new Map<string, CraftCostInput>();
+  const add = (name: string, amount: number, marketKey = name) => {
+    const existing = inputs.get(marketKey);
+    inputs.set(marketKey, {
+      name,
+      marketKey,
+      amount: (existing?.amount ?? 0) + amount
+    });
+  };
+  const marketPriceKey = (name: string, tier?: number) =>
+    tier ? `${name}|tier=${tier}` : name;
+
+  craft.grid.forEach((ingredient) => {
+    if (ingredient) add(ingredient.displayName, 1);
+  });
+  craft.recipe.materials.forEach((material) => {
+    const tier = craft.materialPlan?.tiers.find((entry) => entry.item === material.item)?.tier ?? 1;
+    const marketName = material.item.replace(/^Refined\s+/, "");
+    add(`${material.item} T${tier}`, material.amount, marketPriceKey(marketName, tier));
+  });
+
+  return Array.from(inputs.values()).sort((left, right) => left.name.localeCompare(right.name));
+};
 
 const getRecipeTypes = (recipes: WynncraftRecipe[], profession: Profession) =>
   Array.from(
@@ -1165,6 +1198,86 @@ function IngredientStats({
   );
 }
 
+function MarketCost({ craft }: { craft: SolvedCraft }) {
+  const [priceCache, setPriceCache] = useState<WynnventoryPriceCache | null>(null);
+  const [priceError, setPriceError] = useState(false);
+  const inputs = useMemo(() => craftCostInputs(craft), [craft]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    fetchMarketPriceCache()
+      .then((cache) => {
+        if (mounted) setPriceCache(cache);
+      })
+      .catch(() => {
+        if (mounted) setPriceError(true);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const pricedInputs = inputs.map((input) => {
+    const price = priceCache?.prices[input.marketKey];
+    return {
+      ...input,
+      price,
+      total: price ? price.price * input.amount : null
+    };
+  });
+  const knownCost = pricedInputs.reduce((total, input) => total + (input.total ?? 0), 0);
+  const missingCount = pricedInputs.filter((input) => !input.price).length;
+  const rangeLabel = priceCache?.range
+    ? `${priceCache.range.startDate} to ${priceCache.range.endDate}`
+    : null;
+
+  return (
+    <section className="marketCost" aria-live="polite">
+      <div className="marketCostHeading">
+        <div>
+          <span>Weekly trade market</span>
+          <h3>Craft cost</h3>
+        </div>
+        {priceCache?.generatedAt && (
+          <strong className="marketCostTotal">{formatNumber(knownCost)} emeralds</strong>
+        )}
+      </div>
+
+      {!priceCache && !priceError && <p>Loading market price cache...</p>}
+      {priceError && <p>Market price cache could not be loaded.</p>}
+      {priceCache && !priceCache.generatedAt && (
+        <p>Market price cache has not been generated yet.</p>
+      )}
+      {priceCache?.generatedAt && (
+        <>
+          <div className="marketCostList">
+            {pricedInputs.map((input) => (
+              <div className="marketCostRow" key={input.name}>
+                <span>
+                  {input.name} <small>x{input.amount}</small>
+                </span>
+                {input.price ? (
+                  <strong>
+                    {formatNumber(input.total ?? 0)} <small>(median {formatNumber(input.price.price)})</small>
+                  </strong>
+                ) : (
+                  <strong className="marketUnavailable">No price</strong>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="marketCostMeta">
+            <span>{rangeLabel}</span>
+            {missingCount > 0 && <span>{missingCount} item{missingCount === 1 ? "" : "s"} unpriced</span>}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 function Workbench({
   craft,
   shareUrl,
@@ -1287,6 +1400,7 @@ function Workbench({
           )}
         </div>
       </div>
+      <MarketCost craft={craft} />
     </section>
   );
 }

@@ -25,6 +25,15 @@ npm run build
 
 The GitHub Actions workflow in `.github/workflows/pages.yml` builds the static export and deploys `out/` to GitHub Pages on pushes to `master` or `main`.
 
+## Weekly Market Prices
+
+The workbench reads a static cache of ingredient median prices from
+`public/data/wynnventory-prices.json`. The `Refresh Wynncraft data cache` workflow updates it
+every Monday at 03:29 UTC and commits the refreshed snapshot.
+
+The cache uses Wynnventory's public historical trade-market endpoint, so no browser or GitHub
+Actions API key is required.
+
 ## GitHub Pages
 
 In the repository settings, set Pages to deploy from **GitHub Actions**. The build automatically uses `/<repo-name>/` as the base path for project Pages repositories, and no base path for `<username>.github.io` repositories.
