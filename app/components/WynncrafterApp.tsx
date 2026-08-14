@@ -308,7 +308,7 @@ const durabilityFilterValue = (value: number) => value * durabilityScale;
 const consumableCraftTypes = new Set(["food", "potion", "scroll"]);
 
 const materialTierBoosts: Record<string, number[]> = {
-  // Wiki material tables: one-star contributes +0%, two-star +25%, three-star +40%,
+  // Material tables: one-star contributes +0%, two-star +25%, three-star +40%,
   // weighted by that material's amount in the recipe.
   default: [0, 25, 40]
 };
@@ -319,6 +319,13 @@ const supportsDuration = (recipe: WynncraftRecipe) => Boolean(recipe.duration);
 
 const supportsConsumableStats = (recipe: WynncraftRecipe) =>
   supportsDuration(recipe) || consumableCraftTypes.has(recipe.type);
+
+const healthOrDamageLabel = (recipe: WynncraftRecipe) => {
+  if (consumableCraftTypes.has(recipe.type)) return "Healing";
+  if (recipe.skill === "armouring" || recipe.skill === "tailoring") return "Health";
+  if (recipe.skill === "weaponsmithing" || recipe.skill === "woodworking") return "Damage";
+  return "Health";
+};
 
 const professionSupportsDurability = (recipes: WynncraftRecipe[], profession: Profession) =>
   recipes.some((recipe) => recipe.skill === profession && supportsDurability(recipe));
@@ -373,7 +380,8 @@ const boostRange = (range: NumericRange, boostPercent: number): NumericRange => 
 
 const applyMaterialPlanToRecipe = (
   recipe: WynncraftRecipe,
-  plan?: SolvedCraft["materialPlan"]
+  plan?: SolvedCraft["materialPlan"],
+  hasIngredients = false
 ): WynncraftRecipe => {
   if (!plan) return recipe;
   const nextRecipe: WynncraftRecipe = {
@@ -391,6 +399,13 @@ const applyMaterialPlanToRecipe = (
   if (recipe.duration) {
     const boosted = boostRange(recipeRange(recipe.duration), plan.utilityBoostPercent);
     nextRecipe.duration = { minimum: boosted.min, maximum: boosted.max };
+  }
+
+  if (supportsConsumableStats(recipe) && hasIngredients) {
+    nextRecipe.healthOrDamage = { minimum: 0, maximum: 0 };
+  } else if (recipe.healthOrDamage) {
+    const boosted = boostRange(recipeRange(recipe.healthOrDamage), plan.utilityBoostPercent);
+    nextRecipe.healthOrDamage = { minimum: boosted.min, maximum: boosted.max };
   }
 
   return nextRecipe;
@@ -416,6 +431,7 @@ const withMaterialPlan = (
 
   const candidates = sourceRecipes.length ? sourceRecipes : [craft.recipe];
   const tierOptions: Array<1 | 2 | 3> = [1, 2, 3];
+  const hasIngredients = craft.grid.some((ingredient) => Boolean(ingredient));
 
   const meetsWith = (recipe: WynncraftRecipe, tier: 1 | 2 | 3) => {
     const boostPercent = materialTierBoost(recipe, tier);
@@ -461,17 +477,21 @@ const withMaterialPlan = (
       const boostPercent = materialTierBoost(best, tier);
       return {
         ...craft,
-        recipe: applyMaterialPlanToRecipe(best, {
-          sourceRecipeInternalName: best.internalName,
-          sourceLevel: best.level,
-          utilityBoostPercent: boostPercent,
-          upgradedByLevel: best.internalName !== craft.recipe.internalName,
-          upgradedByTier: tier > 1,
-          tiers: best.materials.map((material) => ({
-            ...material,
-            tier
-          }))
-        }),
+        recipe: applyMaterialPlanToRecipe(
+          best,
+          {
+            sourceRecipeInternalName: best.internalName,
+            sourceLevel: best.level,
+            utilityBoostPercent: boostPercent,
+            upgradedByLevel: best.internalName !== craft.recipe.internalName,
+            upgradedByTier: tier > 1,
+            tiers: best.materials.map((material) => ({
+              ...material,
+              tier
+            }))
+          },
+          hasIngredients
+        ),
         materialPlan: {
           sourceRecipeInternalName: best.internalName,
           sourceLevel: best.level,
@@ -787,6 +807,7 @@ function FinalStatsPreview({ craft }: { craft: SolvedCraft }) {
   const duration = finalDuration(craft);
   const charges = finalCharges(craft);
   const healthOrDamage = recipeRange(craft.recipe.healthOrDamage);
+  const healthOrDamageHasValue = healthOrDamage.min !== 0 || healthOrDamage.max !== 0;
   const targetIds = craft.positives.map((item) => [item.id, item.value] as const);
   const otherIds = Object.entries(craft.ids)
     .filter(([, value]) => rangeMidpoint(value) !== 0)
@@ -806,7 +827,11 @@ function FinalStatsPreview({ craft }: { craft: SolvedCraft }) {
           Charges {formatNumber(charges, 1)}
         </span>
       )}
-      <span>Power {plainRange(healthOrDamage)}</span>
+      {healthOrDamageHasValue && (
+        <span>
+          {healthOrDamageLabel(craft.recipe)} {plainRange(healthOrDamage)}
+        </span>
+      )}
       {standoutIds.map(([id, value]) => (
         <span
           key={id}
@@ -1154,6 +1179,8 @@ function Workbench({
   const baseDuration = recipeRange(craft.recipe.duration);
   const finalDurationValue = finalDuration(craft);
   const baseHealthOrDamage = recipeRange(craft.recipe.healthOrDamage);
+  const healthOrDamageHasValue =
+    baseHealthOrDamage.min !== 0 || baseHealthOrDamage.max !== 0;
 
   return (
     <section className="workbench">
@@ -1221,10 +1248,12 @@ function Workbench({
               />
             </>
           )}
-          <Metric
-            label="Damage / health"
-            value={plainRange(baseHealthOrDamage)}
-          />
+          {healthOrDamageHasValue && (
+            <Metric
+              label={healthOrDamageLabel(craft.recipe)}
+              value={plainRange(baseHealthOrDamage)}
+            />
+          )}
           {supportsDuration(craft.recipe) && (
             <>
               <Metric
