@@ -252,8 +252,8 @@ export const identificationRange = (value?: IdentificationValue): NumericRange =
 };
 
 export const scaleRange = (range: NumericRange, multiplier: number): NumericRange => {
-  const min = range.min * multiplier;
-  const max = range.max * multiplier;
+  const min = Math.floor(range.min * multiplier);
+  const max = Math.floor(range.max * multiplier);
   return min <= max ? { min, max } : { min: max, max: min };
 };
 
@@ -269,6 +269,21 @@ const isUtilityIngredient = (ingredient: WynncraftIngredient) =>
   (ingredient.itemOnlyIDs?.durabilityModifier ?? 0) > 0 ||
   (ingredient.consumableOnlyIDs?.duration ?? 0) > 0 ||
   (ingredient.consumableOnlyIDs?.charges ?? 0) > 0;
+
+const positionModifierValues = (ingredient: WynncraftIngredient) => {
+  const modifiers = ingredient.ingredientPositionModifiers ?? {};
+  return [
+    modifiers.left ?? 0,
+    modifiers.right ?? 0,
+    modifiers.above ?? 0,
+    modifiers.under ?? 0,
+    modifiers.touching ?? 0,
+    modifiers.notTouching ?? 0
+  ];
+};
+
+const isMetaIngredient = (ingredient: WynncraftIngredient) =>
+  positionModifierValues(ingredient).some((value) => value !== 0);
 
 export const gridRelations = (index: number) => {
   const source = GRID_COORDS[index];
@@ -293,6 +308,7 @@ export const gridRelations = (index: number) => {
 export const getEffectiveness = (grid: GridIngredient[]) =>
   grid.map((ingredient, index) => {
     if (!ingredient) return 0;
+    if (isMetaIngredient(ingredient)) return 100;
 
     const value = grid.reduce((total, sourceIngredient, sourceIndex) => {
       if (!sourceIngredient || sourceIndex === index) return total;
@@ -313,7 +329,7 @@ export const getEffectiveness = (grid: GridIngredient[]) =>
       return next;
     }, 100);
 
-    return Math.max(0, value);
+    return Math.floor(value);
   });
 
 export const aggregateCraft = (grid: GridIngredient[]) => {
@@ -333,16 +349,15 @@ export const aggregateCraft = (grid: GridIngredient[]) => {
       ids[id] = addRanges(ids[id] ?? { min: 0, max: 0 }, adjusted);
     });
 
-    durabilityDelta +=
-      (ingredient.itemOnlyIDs?.durabilityModifier ?? 0) * multiplier;
-    chargesDelta += (ingredient.consumableOnlyIDs?.charges ?? 0) * multiplier;
-    durationDelta += (ingredient.consumableOnlyIDs?.duration ?? 0) * multiplier;
+    durabilityDelta += ingredient.itemOnlyIDs?.durabilityModifier ?? 0;
+    chargesDelta += ingredient.consumableOnlyIDs?.charges ?? 0;
+    durationDelta += ingredient.consumableOnlyIDs?.duration ?? 0;
 
     Object.entries(ingredient.itemOnlyIDs ?? {}).forEach(([key, value]) => {
       if (!key.endsWith("Requirement") || !value) return;
       const normalized = key.replace("Requirement", "");
       requirements[normalized] =
-        (requirements[normalized] ?? 0) + value * multiplier;
+        (requirements[normalized] ?? 0) + Math.floor(value * multiplier);
     });
   });
 
@@ -459,15 +474,9 @@ const targetLeaders = (
 };
 
 const modifierPower = (ingredient: WynncraftIngredient) => {
-  const modifiers = ingredient.ingredientPositionModifiers ?? {};
   return Math.max(
     0,
-    modifiers.left ?? 0,
-    modifiers.right ?? 0,
-    modifiers.above ?? 0,
-    modifiers.under ?? 0,
-    modifiers.touching ?? 0,
-    modifiers.notTouching ?? 0
+    ...positionModifierValues(ingredient).map((value) => Math.abs(value))
   );
 };
 
@@ -571,6 +580,72 @@ const bestBoosterLayouts = (
   return uniqueGrids(layouts)
     .filter((grid) => boosterLayoutScore(grid, targetIds, "mean") > bestPureScore)
     .slice(0, 3);
+};
+
+const boosterPackLayoutCache = new Map<string, GridIngredient[][]>();
+
+const bestBoosterPackLayouts = (
+  boosterIngredients: WynncraftIngredient[],
+  payload: WynncraftIngredient,
+  targetIds: string[]
+) => {
+  if (!targetIds.length) return [];
+
+  const boosters = uniqueIngredients(boosterIngredients)
+    .filter((ingredient) => ingredient.internalName !== payload.internalName)
+    .slice(0, 12);
+  if (boosters.length < 2) return [];
+
+  const cacheKey = [
+    payload.internalName,
+    targetIds.join(","),
+    ...boosters.map((ingredient) => ingredient.internalName)
+  ].join("|");
+  const cached = boosterPackLayoutCache.get(cacheKey);
+  if (cached) return cached;
+
+  const bestPureScore = boosterLayoutScore(Array(6).fill(payload), targetIds, "mean");
+  const packCandidates: Array<{ grid: GridIngredient[]; score: number }> = [];
+
+  const addBestLayoutForPack = (pack: WynncraftIngredient[]) => {
+    const best = { value: null as { grid: GridIngredient[]; score: number } | null };
+    const place = (index: number, grid: GridIngredient[]) => {
+      if (index === pack.length) {
+        const score = boosterLayoutScore(grid, targetIds, "mean");
+        if (!best.value || score > best.value.score) best.value = { grid, score };
+        return;
+      }
+
+      GRID_COORDS.forEach((_, slot) => {
+        if (grid[slot]?.internalName !== payload.internalName) return;
+        const nextGrid = [...grid];
+        nextGrid[slot] = pack[index];
+        place(index + 1, nextGrid);
+      });
+    };
+
+    place(0, Array(6).fill(payload));
+    if (best.value && best.value.score > bestPureScore) packCandidates.push(best.value);
+  };
+
+  for (let first = 0; first < boosters.length; first += 1) {
+    for (let second = first + 1; second < boosters.length; second += 1) {
+      addBestLayoutForPack([boosters[first], boosters[second]]);
+
+      for (let third = second + 1; third < boosters.length; third += 1) {
+        addBestLayoutForPack([boosters[first], boosters[second], boosters[third]]);
+      }
+    }
+  }
+
+  const layouts = uniqueGrids(
+    packCandidates
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 18)
+      .map((candidate) => candidate.grid)
+  );
+  boosterPackLayoutCache.set(cacheKey, layouts);
+  return layouts;
 };
 
 const strongestBoosterTotal = (ingredient: WynncraftIngredient) =>
@@ -757,14 +832,7 @@ const candidateLayouts = (
     ...seedIngredients,
     ...targetIngredients
   ]).slice(0, Math.min(18, Math.max(requestedPoolSize, seedIngredients.length)));
-  const strongBoosters = boosterIngredients.filter(
-    (booster) => strongestBoosterTotal(booster) > 100
-  ).slice(0, 8);
-  const searchBoosters = boosterIngredients
-    .filter((booster) => !pool.some((ingredient) => ingredient.internalName === booster.internalName))
-    .slice(0, 4);
-  const replacementBoosters = uniqueIngredients([...strongBoosters, ...searchBoosters]);
-  const boosters = replacementBoosters.slice(0, 12);
+  const boosters = uniqueIngredients(boosterIngredients).slice(0, 12);
   const searchPool = [...pool, ...boosters];
   const beamWidth = 18;
   const seen = new Set<string>();
@@ -783,11 +851,21 @@ const candidateLayouts = (
   const strongestPureTargets = uniqueIngredients([
     ...seedIngredients,
     ...pureTargetIngredients
-  ]).slice(0, 16);
+  ])
+    .sort(
+      (left, right) =>
+        targetIngredientScore(right, preferences.targetIds, "mean") -
+          targetIngredientScore(left, preferences.targetIds, "mean") ||
+        (left.requirements?.level ?? 1) - (right.requirements?.level ?? 1)
+    )
+    .slice(0, 16);
   strongestPureTargets.forEach((payload) => {
-    replacementBoosters.forEach((booster) => {
+    boosters.forEach((booster) => {
       bestBoosterLayouts(booster, payload, preferences.targetIds).forEach(addLayout);
     });
+  });
+  strongestPureTargets.slice(0, 4).forEach((payload) => {
+    bestBoosterPackLayouts(boosters, payload, preferences.targetIds).forEach(addLayout);
   });
 
   const topSix = pool.slice(0, 6);
@@ -1017,7 +1095,7 @@ export const solveRecipe = (
         strongestBoosterTotal(b) - strongestBoosterTotal(a) ||
         modifierPower(b) - modifierPower(a)
     )
-    .slice(0, 8);
+    .slice(0, 12);
   const compatibleUtilityIngredients = uniqueIngredients(
     utilityIngredients.filter((ingredient) => {
       const level = ingredient.requirements?.level ?? 1;

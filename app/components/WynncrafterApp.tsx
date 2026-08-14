@@ -1102,7 +1102,7 @@ function IngredientStats({
             id: "durability",
             label: "Durability",
             value: durabilityDisplayValue(
-              (ingredient.itemOnlyIDs?.durabilityModifier ?? 0) * multiplier
+              ingredient.itemOnlyIDs?.durabilityModifier ?? 0
             ),
             digits: 0
           }
@@ -1113,13 +1113,13 @@ function IngredientStats({
           {
             id: "charges",
             label: "Charges",
-            value: (ingredient.consumableOnlyIDs?.charges ?? 0) * multiplier,
+            value: ingredient.consumableOnlyIDs?.charges ?? 0,
             digits: 1
           },
           {
             id: "duration",
             label: "Duration",
-            value: (ingredient.consumableOnlyIDs?.duration ?? 0) * multiplier,
+            value: ingredient.consumableOnlyIDs?.duration ?? 0,
             digits: 1
           }
         ]
