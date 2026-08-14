@@ -114,6 +114,7 @@ type SavedRecipeStat = {
 };
 
 const savedRecipesStorageKey = "wyndb.saved-recipes.v1";
+const includeMaterialCostsStorageKey = "wyndb.include-material-costs.v1";
 
 const normalizeSavedRecipeStats = (value: unknown): SavedRecipeStat[] =>
   Array.isArray(value)
@@ -340,7 +341,10 @@ type CraftCostInput = {
   marketKey: string;
 };
 
-const craftCostInputs = (craft: SolvedCraft): CraftCostInput[] => {
+const craftCostInputs = (
+  craft: SolvedCraft,
+  includeMaterialCosts = true
+): CraftCostInput[] => {
   const inputs = new Map<string, CraftCostInput>();
   const add = (name: string, amount: number, marketKey = name) => {
     const existing = inputs.get(marketKey);
@@ -356,22 +360,26 @@ const craftCostInputs = (craft: SolvedCraft): CraftCostInput[] => {
   craft.grid.forEach((ingredient) => {
     if (ingredient) add(ingredient.displayName, 1);
   });
-  craft.recipe.materials.forEach((material) => {
-    const tier = craft.materialPlan?.tiers.find((entry) => entry.item === material.item)?.tier ?? 1;
-    const marketName = material.item.replace(/^Refined\s+/, "");
-    add(`${material.item} T${tier}`, material.amount, marketPriceKey(marketName, tier));
-  });
+  if (includeMaterialCosts) {
+    craft.recipe.materials.forEach((material) => {
+      const tier =
+        craft.materialPlan?.tiers.find((entry) => entry.item === material.item)?.tier ?? 1;
+      const marketName = material.item.replace(/^Refined\s+/, "");
+      add(`${material.item} T${tier}`, material.amount, marketPriceKey(marketName, tier));
+    });
+  }
 
   return Array.from(inputs.values()).sort((left, right) => left.name.localeCompare(right.name));
 };
 
 const craftMarketCost = (
   craft: SolvedCraft,
-  priceCache: WynnventoryPriceCache | null
+  priceCache: WynnventoryPriceCache | null,
+  includeMaterialCosts: boolean
 ) => {
   if (!priceCache?.generatedAt) return null;
 
-  return craftCostInputs(craft).reduce<number | null>((total, input) => {
+  return craftCostInputs(craft, includeMaterialCosts).reduce<number | null>((total, input) => {
     const price = priceCache.prices[input.marketKey];
     if (total === null || price === undefined) return null;
     return total + price.price * input.amount;
@@ -1015,12 +1023,14 @@ function ResultsList({
   results,
   selected,
   onSelect,
-  priceCache
+  priceCache,
+  includeMaterialCosts
 }: {
   results: SolvedCraft[];
   selected: string | null;
   onSelect: (internalName: string) => void;
   priceCache: WynnventoryPriceCache | null;
+  includeMaterialCosts: boolean;
 }) {
   const resultsPerPage = 8;
   const [page, setPage] = useState(0);
@@ -1078,7 +1088,7 @@ function ResultsList({
       )}
       <div className="resultList">
         {pagedResults.map((result) => {
-          const cost = craftMarketCost(result, priceCache);
+          const cost = craftMarketCost(result, priceCache, includeMaterialCosts);
 
           return (
             <button
@@ -1348,12 +1358,19 @@ function IngredientStats({
 
 function MarketCost({
   craft,
-  priceCache
+  priceCache,
+  includeMaterialCosts,
+  onIncludeMaterialCostsChange
 }: {
   craft: SolvedCraft;
   priceCache: WynnventoryPriceCache | null;
+  includeMaterialCosts: boolean;
+  onIncludeMaterialCostsChange: (value: boolean) => void;
 }) {
-  const inputs = useMemo(() => craftCostInputs(craft), [craft]);
+  const inputs = useMemo(
+    () => craftCostInputs(craft, includeMaterialCosts),
+    [craft, includeMaterialCosts]
+  );
 
   const pricedInputs = inputs.map((input) => {
     const price = priceCache?.prices[input.marketKey];
@@ -1376,9 +1393,19 @@ function MarketCost({
           <span>Weekly trade market</span>
           <h3>Craft cost</h3>
         </div>
-        {priceCache?.generatedAt && (
-          <strong className="marketCostTotal">{formatEmeralds(knownCost)}</strong>
-        )}
+        <div className="marketCostActions">
+          <label className="marketCostToggle">
+            <input
+              type="checkbox"
+              checked={includeMaterialCosts}
+              onChange={(event) => onIncludeMaterialCostsChange(event.target.checked)}
+            />
+            <span>Materials</span>
+          </label>
+          {priceCache?.generatedAt && (
+            <strong className="marketCostTotal">{formatEmeralds(knownCost)}</strong>
+          )}
+        </div>
       </div>
 
       {!priceCache && <p>Loading market price cache...</p>}
@@ -1419,13 +1446,17 @@ function Workbench({
   shareUrl,
   saved,
   onSave,
-  priceCache
+  priceCache,
+  includeMaterialCosts,
+  onIncludeMaterialCostsChange
 }: {
   craft: SolvedCraft;
   shareUrl: string;
   saved: boolean;
   onSave: () => void;
   priceCache: WynnventoryPriceCache | null;
+  includeMaterialCosts: boolean;
+  onIncludeMaterialCostsChange: (value: boolean) => void;
 }) {
   const baseDurability = estimatedRecipeDurabilityRange(craft.recipe);
   const finalDurability = clampRangeMin(addFlatToRange(baseDurability, craft.durabilityDelta));
@@ -1538,7 +1569,12 @@ function Workbench({
           )}
         </div>
       </div>
-      <MarketCost craft={craft} priceCache={priceCache} />
+      <MarketCost
+        craft={craft}
+        priceCache={priceCache}
+        includeMaterialCosts={includeMaterialCosts}
+        onIncludeMaterialCostsChange={onIncludeMaterialCostsChange}
+      />
     </section>
   );
 }
@@ -1985,6 +2021,8 @@ export default function WynncrafterApp() {
   const [urlHydrated, setUrlHydrated] = useState(false);
   const [savedRecipes, setSavedRecipes] = useState<SavedRecipe[]>([]);
   const [savedRecipesLoaded, setSavedRecipesLoaded] = useState(false);
+  const [includeMaterialCosts, setIncludeMaterialCosts] = useState(true);
+  const [materialCostsLoaded, setMaterialCostsLoaded] = useState(false);
 
   useEffect(() => {
     try {
@@ -2019,6 +2057,21 @@ export default function WynncrafterApp() {
     if (!savedRecipesLoaded) return;
     window.localStorage.setItem(savedRecipesStorageKey, JSON.stringify(savedRecipes));
   }, [savedRecipes, savedRecipesLoaded]);
+
+  useEffect(() => {
+    setIncludeMaterialCosts(
+      window.localStorage.getItem(includeMaterialCostsStorageKey) !== "false"
+    );
+    setMaterialCostsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!materialCostsLoaded) return;
+    window.localStorage.setItem(
+      includeMaterialCostsStorageKey,
+      String(includeMaterialCosts)
+    );
+  }, [includeMaterialCosts, materialCostsLoaded]);
 
   useEffect(() => {
     const sharedState =
@@ -2282,7 +2335,7 @@ export default function WynncrafterApp() {
         .filter((craft): craft is SolvedCraft => Boolean(craft))
         .filter((craft) => {
           if (searchedPreferences.maxBudget === undefined) return true;
-          const cost = craftMarketCost(craft, marketPriceCache);
+          const cost = craftMarketCost(craft, marketPriceCache, includeMaterialCosts);
           return cost !== null && cost <= searchedPreferences.maxBudget;
         });
       const deduped = dedupeByLayoutKeepingLowestLevel(solved).filter((craft) =>
@@ -2318,6 +2371,7 @@ export default function WynncrafterApp() {
       searchedBudgetIngredients,
       searchedMaxLevel,
       searchedPreferences,
+      includeMaterialCosts,
       searchedBudgetUtilityIngredients
     ]
   );
@@ -2471,6 +2525,7 @@ export default function WynncrafterApp() {
                 selected={selectedCraft ? craftSelectionKey(selectedCraft) : null}
                 onSelect={setSelectedRecipe}
                 priceCache={marketPriceCache}
+                includeMaterialCosts={includeMaterialCosts}
               />
             </section>
 
@@ -2483,6 +2538,8 @@ export default function WynncrafterApp() {
                     saved={selectedRecipeSaved}
                     onSave={saveSelectedRecipe}
                     priceCache={marketPriceCache}
+                    includeMaterialCosts={includeMaterialCosts}
+                    onIncludeMaterialCostsChange={setIncludeMaterialCosts}
                   />
                   <DetailPanel craft={selectedCraft} />
                   <p className="sourceNote">

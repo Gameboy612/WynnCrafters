@@ -981,6 +981,28 @@ h3 {
   font-size: 1rem;
 }
 
+.marketCostActions {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.marketCostToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.marketCostToggle input {
+  accent-color: var(--teal);
+  margin: 0;
+}
+
 .marketCostTotal {
   color: var(--green);
   font-size: 0.94rem;
