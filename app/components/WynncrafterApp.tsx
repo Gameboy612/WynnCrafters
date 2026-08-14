@@ -38,6 +38,8 @@ import {
   identificationRange,
   rangeMidpoint,
   scaleRange,
+  precomputeRecipeSearch,
+  precomputeTargetSearch,
   solveRecipe,
   tierLabel,
   titleCase
@@ -1836,6 +1838,111 @@ export default function WynncrafterApp() {
         .sort((a, b) => b.level.maximum - a.level.maximum),
     [searchedCraftedType, searchedMaxLevel, searchedMinLevel, searchedProfession, recipes]
   );
+
+  const draftMatchingRecipes = useMemo(
+    () =>
+      recipes.filter(
+        (recipe) =>
+          recipe.skill === draftProfession &&
+          recipe.type === draftCraftedType &&
+          recipe.level.maximum >= draftMinLevel &&
+          recipe.level.minimum <= draftMaxLevel
+      ),
+    [draftCraftedType, draftMaxLevel, draftMinLevel, draftProfession, recipes]
+  );
+
+  useEffect(() => {
+    if (
+      loading ||
+      !ingredients.length ||
+      !draftPreferences.targetIds.length ||
+      typeof window === "undefined"
+    ) {
+      return;
+    }
+
+    const levels = Array.from(
+      new Set(
+        draftMatchingRecipes.map(
+          (recipe) => draftPreferences.maxIngredientLevel ?? recipe.level.maximum
+        )
+      )
+    ).sort((a, b) => a - b);
+    const queue = [
+      ...levels.map((maxIngredientLevel) => ({
+        kind: "prepare" as const,
+        maxIngredientLevel
+      })),
+      ...draftMatchingRecipes.map((recipe) => ({ kind: "solve" as const, recipe }))
+    ];
+    if (!queue.length) return;
+
+    let cancelled = false;
+    let queueIndex = 0;
+    let debounceHandle: number | undefined;
+    let timeoutHandle: number | undefined;
+    let idleHandle: number | undefined;
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout?: number }
+      ) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    const warmNext = () => {
+      if (cancelled || queueIndex >= queue.length) return;
+      const work = queue[queueIndex];
+      queueIndex += 1;
+
+      if (work.kind === "prepare") {
+        precomputeTargetSearch(
+          ingredients,
+          utilityIngredients,
+          draftProfession,
+          work.maxIngredientLevel,
+          draftPreferences
+        );
+      } else {
+        precomputeRecipeSearch(
+          work.recipe,
+          ingredients,
+          draftPreferences,
+          utilityIngredients
+        );
+      }
+
+      scheduleNext();
+    };
+
+    const scheduleNext = () => {
+      if (cancelled || queueIndex >= queue.length) return;
+      if (idleWindow.requestIdleCallback) {
+        idleHandle = idleWindow.requestIdleCallback(warmNext, { timeout: 700 });
+      } else {
+        timeoutHandle = window.setTimeout(warmNext, 0);
+      }
+    };
+
+    debounceHandle = window.setTimeout(scheduleNext, 250);
+
+    return () => {
+      cancelled = true;
+      if (debounceHandle !== undefined) window.clearTimeout(debounceHandle);
+      if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle);
+      if (idleHandle !== undefined) idleWindow.cancelIdleCallback?.(idleHandle);
+    };
+  }, [
+    draftCraftedType,
+    draftMatchingRecipes,
+    draftMaxLevel,
+    draftMinLevel,
+    draftPreferences,
+    draftProfession,
+    ingredients,
+    loading,
+    utilityIngredients
+  ]);
 
   const solvedRecipes = useMemo(
     () => {

@@ -667,6 +667,131 @@ const buildIdBaselines = (
     })
   );
 
+type PreparedIngredientSearch = {
+  compatibleItems: WynncraftIngredient[];
+  compatibleUtilityIngredients: WynncraftIngredient[];
+  idBaselines: Record<string, number>;
+  targetItems: WynncraftIngredient[];
+  seedIngredients: WynncraftIngredient[];
+  boosterPool: WynncraftIngredient[];
+};
+
+const preparedIngredientSearchCache = new Map<string, PreparedIngredientSearch>();
+const solvedRecipeCache = new Map<string, SolvedCraft[]>();
+let cachedIngredients: WynncraftIngredient[] | null = null;
+let cachedUtilityIngredients: WynncraftIngredient[] | null = null;
+
+const clearSearchCachesForData = (
+  ingredients: WynncraftIngredient[],
+  utilityIngredients: WynncraftIngredient[]
+) => {
+  if (cachedIngredients === ingredients && cachedUtilityIngredients === utilityIngredients) return;
+
+  cachedIngredients = ingredients;
+  cachedUtilityIngredients = utilityIngredients;
+  preparedIngredientSearchCache.clear();
+  solvedRecipeCache.clear();
+};
+
+const cacheValue = <T>(cache: Map<string, T>, key: string, value: T, limit = 160) => {
+  if (cache.size >= limit) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey) cache.delete(oldestKey);
+  }
+  cache.set(key, value);
+  return value;
+};
+
+const searchIngredientKey = (
+  profession: string,
+  maxIngredientLevel: number,
+  preferences: SolverPreferences
+) =>
+  JSON.stringify([
+    profession,
+    maxIngredientLevel,
+    preferences.targetIds,
+    preferences.avoidIds,
+    preferences.ingredientQuery.trim().toLowerCase(),
+    bannedIngredientTerms(preferences.bannedIngredients)
+  ]);
+
+const prepareIngredientSearch = (
+  ingredients: WynncraftIngredient[],
+  utilityIngredients: WynncraftIngredient[],
+  profession: string,
+  maxIngredientLevel: number,
+  preferences: SolverPreferences
+) => {
+  clearSearchCachesForData(ingredients, utilityIngredients);
+
+  const key = searchIngredientKey(profession, maxIngredientLevel, preferences);
+  const cached = preparedIngredientSearchCache.get(key);
+  if (cached) return cached;
+
+  const bannedTerms = bannedIngredientTerms(preferences.bannedIngredients);
+  const matchesSearch = (ingredient: WynncraftIngredient) => {
+    const level = ingredient.requirements?.level ?? 1;
+    const skills = ingredient.requirements?.skills ?? [];
+    const matchesSkill = skills.length === 0 || skills.includes(profession);
+    const matchesQuery =
+      !preferences.ingredientQuery ||
+      ingredient.displayName
+        .toLowerCase()
+        .includes(preferences.ingredientQuery.toLowerCase());
+
+    return (
+      level <= maxIngredientLevel &&
+      matchesSkill &&
+      matchesQuery &&
+      !isBannedIngredient(ingredient, bannedTerms)
+    );
+  };
+
+  const compatibleItems = ingredients.filter(matchesSearch);
+  const idBaselines = buildIdBaselines(compatibleItems, [
+    ...preferences.targetIds,
+    ...preferences.avoidIds
+  ]);
+  const targetItems = preferences.targetIds.length
+    ? compatibleItems.filter((ingredient) =>
+        hasPositiveTargetId(ingredient, preferences.targetIds)
+      )
+    : compatibleItems;
+
+  return cacheValue(preparedIngredientSearchCache, key, {
+    compatibleItems,
+    compatibleUtilityIngredients: uniqueIngredients(utilityIngredients.filter(matchesSearch)),
+    idBaselines,
+    targetItems,
+    seedIngredients: targetLeaders(targetItems, preferences.targetIds),
+    boosterPool: compatibleItems
+      .filter((ingredient) => modifierPower(ingredient) > 0)
+      .sort(
+        (a, b) =>
+          strongestBoosterTotal(b) - strongestBoosterTotal(a) ||
+          modifierPower(b) - modifierPower(a)
+      )
+      .slice(0, 12)
+  });
+};
+
+export const precomputeTargetSearch = (
+  ingredients: WynncraftIngredient[],
+  utilityIngredients: WynncraftIngredient[],
+  profession: Profession,
+  maxIngredientLevel: number,
+  preferences: SolverPreferences
+) => {
+  prepareIngredientSearch(
+    ingredients,
+    utilityIngredients,
+    profession,
+    maxIngredientLevel,
+    preferences
+  );
+};
+
 const gridKey = (grid: GridIngredient[]) =>
   grid.map((ingredient) => ingredient?.internalName ?? "empty").join("|");
 
@@ -1042,88 +1167,76 @@ const candidateLayouts = (
     .map((candidate) => candidate.grid);
 };
 
+const solvedRecipeKey = (recipe: WynncraftRecipe, preferences: SolverPreferences) =>
+  JSON.stringify([
+    recipe.internalName,
+    recipe.skill,
+    recipe.level.maximum,
+    preferences.targetIds,
+    preferences.avoidIds,
+    preferences.ingredientQuery.trim().toLowerCase(),
+    bannedIngredientTerms(preferences.bannedIngredients),
+    preferences.minDurability,
+    preferences.minDuration,
+    preferences.minCharges,
+    preferences.maxIngredientLevel,
+    preferences.maxIngredients,
+    preferences.includeTradeoffs
+  ]);
+
 export const solveRecipe = (
   recipe: WynncraftRecipe,
   ingredients: WynncraftIngredient[],
   preferences: SolverPreferences,
   utilityIngredients: WynncraftIngredient[] = []
 ): SolvedCraft[] => {
+  clearSearchCachesForData(ingredients, utilityIngredients);
+  const recipeCacheKey = solvedRecipeKey(recipe, preferences);
+  const cachedResult = solvedRecipeCache.get(recipeCacheKey);
+  if (cachedResult) return cachedResult;
+
   const maxIngredientLevel = preferences.maxIngredientLevel ?? recipe.level.maximum;
-  const bannedTerms = bannedIngredientTerms(preferences.bannedIngredients);
-  const compatibleItems = ingredients.filter((ingredient) => {
-      const level = ingredient.requirements?.level ?? 1;
-      const skills = ingredient.requirements?.skills ?? [];
-      const matchesSkill = skills.length === 0 || skills.includes(recipe.skill);
-      const matchesQuery =
-        !preferences.ingredientQuery ||
-        ingredient.displayName
-          .toLowerCase()
-          .includes(preferences.ingredientQuery.toLowerCase());
-      return (
-        level <= maxIngredientLevel &&
-        matchesSkill &&
-        matchesQuery &&
-        !isBannedIngredient(ingredient, bannedTerms)
-      );
-    });
-  const idBaselines = buildIdBaselines(compatibleItems, [
-    ...preferences.targetIds,
-    ...preferences.avoidIds
-  ]);
-  const targetItems = preferences.targetIds.length
-    ? compatibleItems.filter((ingredient) =>
-        hasPositiveTargetId(ingredient, preferences.targetIds)
-      )
-    : compatibleItems;
-  const seedIngredients = targetLeaders(targetItems, preferences.targetIds);
-  const compatible = compatibleItems
+  const prepared = prepareIngredientSearch(
+    ingredients,
+    utilityIngredients,
+    recipe.skill,
+    maxIngredientLevel,
+    preferences
+  );
+  const compatible = [...prepared.compatibleItems]
     .sort(
       (a, b) =>
         Number(hasPositiveTargetId(b, preferences.targetIds)) -
           Number(hasPositiveTargetId(a, preferences.targetIds)) ||
         targetIngredientScore(b, preferences.targetIds, "mean") -
           targetIngredientScore(a, preferences.targetIds, "mean") ||
-        ingredientPower(recipe, b, preferences.targetIds, preferences.avoidIds, idBaselines) -
-          ingredientPower(recipe, a, preferences.targetIds, preferences.avoidIds, idBaselines) ||
+        ingredientPower(
+          recipe,
+          b,
+          preferences.targetIds,
+          preferences.avoidIds,
+          prepared.idBaselines
+        ) -
+          ingredientPower(
+            recipe,
+            a,
+            preferences.targetIds,
+            preferences.avoidIds,
+            prepared.idBaselines
+          ) ||
         modifierPower(b) - modifierPower(a)
     )
     .slice(0, MAX_INGREDIENT_POOL_SIZE);
-  const boosterPool = compatibleItems
-    .filter((ingredient) => modifierPower(ingredient) > 0)
-    .sort(
-      (a, b) =>
-        strongestBoosterTotal(b) - strongestBoosterTotal(a) ||
-        modifierPower(b) - modifierPower(a)
-    )
-    .slice(0, 12);
-  const compatibleUtilityIngredients = uniqueIngredients(
-    utilityIngredients.filter((ingredient) => {
-      const level = ingredient.requirements?.level ?? 1;
-      const skills = ingredient.requirements?.skills ?? [];
-      const matchesSkill = skills.length === 0 || skills.includes(recipe.skill);
-      const matchesQuery =
-        !preferences.ingredientQuery ||
-        ingredient.displayName
-          .toLowerCase()
-          .includes(preferences.ingredientQuery.toLowerCase());
-      return (
-        level <= maxIngredientLevel &&
-        matchesSkill &&
-        matchesQuery &&
-        !isBannedIngredient(ingredient, bannedTerms)
-      );
-    })
-  );
 
   const layouts = candidateLayouts(
     compatible,
-    boosterPool,
-    compatibleUtilityIngredients,
-    seedIngredients,
-    targetItems,
+    prepared.boosterPool,
+    prepared.compatibleUtilityIngredients,
+    prepared.seedIngredients,
+    prepared.targetItems,
     recipe,
     preferences,
-    idBaselines
+    prepared.idBaselines
   );
   const scored = layouts.map((grid) => {
     const aggregate = aggregateCraft(grid);
@@ -1131,7 +1244,7 @@ export const solveRecipe = (
     return {
       grid,
       aggregate,
-      score: scoreAggregate(recipe, aggregate, preferences, idBaselines)
+      score: scoreAggregate(recipe, aggregate, preferences, prepared.idBaselines)
     };
   });
 
@@ -1144,7 +1257,7 @@ export const solveRecipe = (
     isSingleTargetIngredientLayout(candidate.grid, preferences.targetIds)
   );
   const utilityIngredientNames = new Set(
-    compatibleUtilityIngredients.map((ingredient) => ingredient.internalName)
+    prepared.compatibleUtilityIngredients.map((ingredient) => ingredient.internalName)
   );
   const protectedUtilityLayouts = sorted
     .filter((candidate) =>
@@ -1167,7 +1280,7 @@ export const solveRecipe = (
     ...protectedUtilityLayouts
   ]);
 
-  return selected
+  return cacheValue(solvedRecipeCache, recipeCacheKey, selected
     .map((candidate) => {
       const entries = Object.entries(candidate.aggregate.ids).sort(
         ([, a], [, b]) => Math.abs(rangeMidpoint(b)) - Math.abs(rangeMidpoint(a))
@@ -1195,7 +1308,16 @@ export const solveRecipe = (
           ? []
           : ["No compatible ingredients matched the filters, showing the base recipe only."]
       };
-    });
+    }));
+};
+
+export const precomputeRecipeSearch = (
+  recipe: WynncraftRecipe,
+  ingredients: WynncraftIngredient[],
+  preferences: SolverPreferences,
+  utilityIngredients: WynncraftIngredient[] = []
+) => {
+  solveRecipe(recipe, ingredients, preferences, utilityIngredients);
 };
 
 export const fetchRecipes = async (): Promise<WynncraftRecipe[]> => {
