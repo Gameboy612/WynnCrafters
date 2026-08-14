@@ -1315,8 +1315,7 @@ function IngredientStats({
       : [])
   ].filter((stat) => stat.value !== 0);
 
-  const visibleStats = [...idStats, ...utilityStats].slice(0, 5);
-  const hiddenCount = idStats.length + utilityStats.length - visibleStats.length;
+  const visibleStats = [...idStats, ...utilityStats];
 
   if (!visibleStats.length) {
     return <span className="ingredientNoStats">No direct stat modifiers</span>;
@@ -1343,11 +1342,6 @@ function IngredientStats({
           </strong>
         </div>
       ))}
-      {hiddenCount > 0 && (
-        <span className="ingredientMore">
-          +{hiddenCount} more stat{hiddenCount === 1 ? "" : "s"}
-        </span>
-      )}
     </div>
   );
 }
@@ -1904,7 +1898,6 @@ function SidebarFilters({
         <div className="pillWrap">
           {targetIdOptions
             .filter((id) => defaultTargets.includes(id) || FRIENDLY_ID_NAMES[id])
-            .slice(0, targetIdQuery.trim() ? undefined : 34)
             .map((id) => (
               <SelectablePill
                 key={id}
@@ -1937,7 +1930,6 @@ function SidebarFilters({
             <div className="pillWrap compact">
               {avoidIdOptions
                 .filter((id) => defaultAvoids.includes(id) || FRIENDLY_ID_NAMES[id])
-                .slice(0, avoidIdQuery.trim() ? undefined : 26)
                 .map((id) => (
                   <SelectablePill
                     key={id}

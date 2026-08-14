@@ -64,16 +64,26 @@ const fetchHistory = async (item, attempt = 0) => {
 };
 
 const priceForHistory = (history) => {
-  const latestMedian = history
-    .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp))
-    .reverse()
-    .find((entry) => typeof entry.p50_price === "number" && Number.isFinite(entry.p50_price));
+  const dailyMedians = history
+    .map((entry) => entry.p50_price)
+    .filter((price) => typeof price === "number" && Number.isFinite(price))
+    .sort((left, right) => left - right);
 
-  if (!latestMedian) return null;
+  if (!dailyMedians.length) return null;
+
+  const middle = Math.floor(dailyMedians.length / 2);
+  const price =
+    dailyMedians.length % 2 === 0
+      ? (dailyMedians[middle - 1] + dailyMedians[middle]) / 2
+      : dailyMedians[middle];
+  const latestTimestamp = history
+    .map((entry) => entry.timestamp)
+    .filter((timestamp) => typeof timestamp === "string")
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
 
   return {
-    price: latestMedian.p50_price,
-    sampledAt: latestMedian.timestamp
+    price,
+    sampledAt: latestTimestamp
   };
 };
 
@@ -121,7 +131,7 @@ const priceCache = {
     startDate: formatDate(startDate),
     endDate: formatDate(endDate)
   },
-  pricing: "most recent p50_price in the requested history window",
+  pricing: "median of daily p50_price values in the requested history window",
   prices,
   unavailable: Array.from(unavailable).sort(),
   failures

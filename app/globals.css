@@ -924,8 +924,7 @@ h3 {
   color: var(--red);
 }
 
-.ingredientNoStats,
-.ingredientMore {
+.ingredientNoStats {
   color: var(--muted);
   font-size: 0.76rem;
   font-weight: 800;
