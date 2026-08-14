@@ -1,6 +1,6 @@
-# Wynncrafters
+# WynnDB
 
-Wynncrafters is a static Next.js recipe finder for Wynncraft crafting. It is designed for GitHub Pages: the app shell is exported at build time, and recipe/ingredient data is fetched from the Wynncraft API directly in the browser.
+WynnDB is a static Next.js recipe finder for Wynncraft crafting. It is designed for GitHub Pages: the app shell is exported at build time, and recipe/ingredient data is fetched from the Wynncraft API directly in the browser.
 
 ## Features
 

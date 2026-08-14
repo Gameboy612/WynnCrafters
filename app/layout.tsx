@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Wynncrafters",
+  title: "WynnDB",
   description:
     "A static Wynncraft recipe finder that uses the Wynncraft API from the browser."
 };

@@ -1045,9 +1045,9 @@ function SidebarFilters({
   return (
     <aside className="filters">
       <div className="brandBlock">
-        <img src="./wynncrafters-mark.png" alt="" />
+        <img src="./wyndb-mark.png" alt="" />
         <div>
-          <span>Wynncrafters</span>
+          <span>WynnDB</span>
           <strong>Recipe finder</strong>
         </div>
       </div>

@@ -1,5 +1,5 @@
 const isGithubActions = process.env.GITHUB_ACTIONS === "true";
-const repositoryName = process.env.GITHUB_REPOSITORY?.split("/").at(-1) ?? "WynnCrafters";
+const repositoryName = process.env.GITHUB_REPOSITORY?.split("/").at(-1) ?? "WynnDB";
 const isUserPagesRepository = repositoryName.endsWith(".github.io");
 const configuredBasePath =
   process.env.NEXT_PUBLIC_BASE_PATH ??
