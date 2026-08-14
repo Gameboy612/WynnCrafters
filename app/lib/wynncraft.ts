@@ -99,6 +99,7 @@ type WynncraftCache = {
   source: string;
   recipes: WynncraftRecipe[];
   ingredients: WynncraftIngredient[];
+  utilityIngredients?: WynncraftIngredient[];
 };
 
 let cachePromise: Promise<WynncraftCache | null> | null = null;
@@ -117,6 +118,11 @@ export type RecipeSearchInput = {
   craftedType: string;
   minLevel: number;
   maxLevel: number;
+};
+
+export type WynncraftIngredientData = {
+  ingredients: WynncraftIngredient[];
+  utilityIngredients: WynncraftIngredient[];
 };
 
 export type SolverPreferences = {
@@ -234,6 +240,9 @@ export const rangeAverage = (range?: RangeValue) => {
   return (min + max) / 2;
 };
 
+const rangeMaximum = (range?: RangeValue) =>
+  range?.maximum ?? range?.max ?? range?.raw ?? range?.minimum ?? range?.min ?? 0;
+
 export const identificationRange = (value?: IdentificationValue): NumericRange => {
   if (!value) return { min: 0, max: 0 };
   const min = value.min ?? value.raw ?? value.max ?? 0;
@@ -254,6 +263,11 @@ export const addRanges = (left: NumericRange, right: NumericRange): NumericRange
 
 export const rangeMidpoint = (range?: NumericRange) =>
   range ? (range.min + range.max) / 2 : 0;
+
+const isUtilityIngredient = (ingredient: WynncraftIngredient) =>
+  (ingredient.itemOnlyIDs?.durabilityModifier ?? 0) > 0 ||
+  (ingredient.consumableOnlyIDs?.duration ?? 0) > 0 ||
+  (ingredient.consumableOnlyIDs?.charges ?? 0) > 0;
 
 export const gridRelations = (index: number) => {
   const source = GRID_COORDS[index];
@@ -647,6 +661,65 @@ const scoreAggregate = (
   return positiveScore - penaltyScore + tradeoffScore + levelFit;
 };
 
+const durabilityScale = 1000;
+
+const baseChargesForLevel = (level: number) => {
+  if (level <= 30) return 1;
+  if (level <= 70) return 2;
+  return 3;
+};
+
+const utilityRequirementGap = (
+  recipe: WynncraftRecipe,
+  aggregate: ReturnType<typeof aggregateCraft>,
+  preferences: SolverPreferences
+) => {
+  const durabilityGap = supportsDurability(recipe)
+    ? Math.max(
+        0,
+        preferences.minDurability * durabilityScale -
+          (rangeMaximum(recipe.durability) + aggregate.durabilityDelta)
+      ) / durabilityScale
+    : 0;
+  const durationGap = supportsDuration(recipe)
+    ? Math.max(
+        0,
+        preferences.minDuration -
+          (rangeAverage(recipe.duration) + aggregate.durationDelta)
+      ) / 30
+    : 0;
+  const chargesGap = supportsConsumableStats(recipe)
+    ? Math.max(
+        0,
+        preferences.minCharges -
+          (baseChargesForLevel(recipe.level.minimum) + aggregate.chargesDelta)
+      ) * 2
+    : 0;
+
+  return durabilityGap + durationGap + chargesGap;
+};
+
+const utilityIngredientScore = (
+  recipe: WynncraftRecipe,
+  ingredient: WynncraftIngredient,
+  preferences: SolverPreferences
+) => {
+  const durability =
+    supportsDurability(recipe) && preferences.minDurability > 0
+      ? Math.max(0, ingredient.itemOnlyIDs?.durabilityModifier ?? 0) / durabilityScale
+      : 0;
+  const duration =
+    supportsDuration(recipe) && preferences.minDuration > 0
+      ? Math.max(0, ingredient.consumableOnlyIDs?.duration ?? 0) / 30
+      : 0;
+  const charges =
+    supportsConsumableStats(recipe) && preferences.minCharges > 0
+      ? Math.max(0, ingredient.consumableOnlyIDs?.charges ?? 0) * 2
+      : 0;
+
+  return durability + duration + charges;
+};
+
 const compareAggregatesByTarget = (
   left: ReturnType<typeof aggregateCraft>,
   right: ReturnType<typeof aggregateCraft>,
@@ -671,6 +744,7 @@ const compareAggregatesByTarget = (
 const candidateLayouts = (
   targetIngredients: WynncraftIngredient[],
   boosterIngredients: WynncraftIngredient[],
+  utilityIngredients: WynncraftIngredient[],
   seedIngredients: WynncraftIngredient[],
   pureTargetIngredients: WynncraftIngredient[],
   recipe: WynncraftRecipe,
@@ -795,20 +869,91 @@ const candidateLayouts = (
     addLayout(Array(6).fill(null));
   }
 
-  const scoredLayouts = layouts
-    .map((grid) => {
-      const aggregate = aggregateCraft(grid);
-      return {
-        grid,
-        aggregate,
-        score: scoreAggregate(recipe, aggregate, preferences, idBaselines)
-      };
-    })
+  const scoreLayouts = () =>
+    layouts
+      .map((grid) => {
+        const aggregate = aggregateCraft(grid);
+        return {
+          grid,
+          aggregate,
+          score: scoreAggregate(recipe, aggregate, preferences, idBaselines)
+        };
+      })
+      .sort(
+        (a, b) =>
+          compareAggregatesByTarget(a.aggregate, b.aggregate, preferences.targetIds) ||
+          b.score - a.score
+      );
+
+  let scoredLayouts = scoreLayouts();
+  const utilityPool = uniqueIngredients(utilityIngredients)
+    .filter((ingredient) => utilityIngredientScore(recipe, ingredient, preferences) > 0)
     .sort(
       (a, b) =>
-        compareAggregatesByTarget(a.aggregate, b.aggregate, preferences.targetIds) ||
-        b.score - a.score
-    );
+        utilityIngredientScore(recipe, b, preferences) -
+          utilityIngredientScore(recipe, a, preferences) ||
+        targetIngredientScore(b, preferences.targetIds, "mean") -
+          targetIngredientScore(a, preferences.targetIds, "mean")
+    )
+    .slice(0, 10);
+
+  const pureBaseLayouts = scoredLayouts.filter((candidate) =>
+    isSingleTargetIngredientLayout(candidate.grid, preferences.targetIds)
+  );
+
+  if (utilityPool.length) {
+    const utilityBases = uniqueGrids([
+      ...pureBaseLayouts.slice(0, 6).map((candidate) => candidate.grid),
+      ...scoredLayouts.slice(0, 10).map((candidate) => candidate.grid)
+    ]);
+
+    utilityBases.forEach((baseGrid) => {
+      const baseAggregate = aggregateCraft(baseGrid);
+      const baseGap = utilityRequirementGap(recipe, baseAggregate, preferences);
+      if (baseGap <= 0) return;
+
+      utilityPool.forEach((utilityIngredient) => {
+        const bestReplacement = GRID_COORDS.map((_, slot) => {
+          if (baseGrid[slot]?.internalName === utilityIngredient.internalName) return null;
+          const grid = [...baseGrid];
+          grid[slot] = utilityIngredient;
+          const aggregate = aggregateCraft(grid);
+          return {
+            grid,
+            aggregate,
+            utilityGap: utilityRequirementGap(recipe, aggregate, preferences),
+            score: scoreAggregate(recipe, aggregate, preferences, idBaselines)
+          };
+        })
+          .filter(
+            (
+              candidate
+            ): candidate is {
+              grid: GridIngredient[];
+              aggregate: ReturnType<typeof aggregateCraft>;
+              utilityGap: number;
+              score: number;
+            } => Boolean(candidate)
+          )
+          .filter((candidate) => candidate.utilityGap < baseGap - 0.0001)
+          .sort(
+            (a, b) =>
+              a.utilityGap - b.utilityGap ||
+              compareAggregatesByTarget(
+                a.aggregate,
+                b.aggregate,
+                preferences.targetIds
+              ) ||
+              b.score - a.score
+          )[0];
+
+        if (bestReplacement) addLayout(bestReplacement.grid);
+      });
+    });
+
+    scoredLayouts = scoreLayouts();
+  }
+
   const pureLayouts = scoredLayouts.filter((candidate) =>
     isSingleTargetIngredientLayout(candidate.grid, preferences.targetIds)
   );
@@ -821,7 +966,8 @@ const candidateLayouts = (
 export const solveRecipe = (
   recipe: WynncraftRecipe,
   ingredients: WynncraftIngredient[],
-  preferences: SolverPreferences
+  preferences: SolverPreferences,
+  utilityIngredients: WynncraftIngredient[] = []
 ): SolvedCraft[] => {
   const maxIngredientLevel = preferences.maxIngredientLevel ?? recipe.level.maximum;
   const bannedTerms = bannedIngredientTerms(preferences.bannedIngredients);
@@ -871,10 +1017,29 @@ export const solveRecipe = (
         modifierPower(b) - modifierPower(a)
     )
     .slice(0, 8);
+  const compatibleUtilityIngredients = uniqueIngredients(
+    utilityIngredients.filter((ingredient) => {
+      const level = ingredient.requirements?.level ?? 1;
+      const skills = ingredient.requirements?.skills ?? [];
+      const matchesSkill = skills.length === 0 || skills.includes(recipe.skill);
+      const matchesQuery =
+        !preferences.ingredientQuery ||
+        ingredient.displayName
+          .toLowerCase()
+          .includes(preferences.ingredientQuery.toLowerCase());
+      return (
+        level <= maxIngredientLevel &&
+        matchesSkill &&
+        matchesQuery &&
+        !isBannedIngredient(ingredient, bannedTerms)
+      );
+    })
+  );
 
   const layouts = candidateLayouts(
     compatible,
     boosterPool,
+    compatibleUtilityIngredients,
     seedIngredients,
     targetItems,
     recipe,
@@ -899,10 +1064,29 @@ export const solveRecipe = (
   const protectedTargetLayouts = sorted.filter((candidate) =>
     isSingleTargetIngredientLayout(candidate.grid, preferences.targetIds)
   );
+  const utilityIngredientNames = new Set(
+    compatibleUtilityIngredients.map((ingredient) => ingredient.internalName)
+  );
+  const protectedUtilityLayouts = sorted
+    .filter((candidate) =>
+      candidate.grid.some(
+        (ingredient) =>
+          ingredient !== null && utilityIngredientNames.has(ingredient.internalName)
+      )
+    )
+    .sort(
+      (a, b) =>
+        utilityRequirementGap(recipe, a.aggregate, preferences) -
+          utilityRequirementGap(recipe, b.aggregate, preferences) ||
+        compareAggregatesByTarget(a.aggregate, b.aggregate, preferences.targetIds) ||
+        b.score - a.score
+    )
+    .slice(0, 8);
   const selected = uniqueByGrid([
-    ...sorted,
-    ...protectedTargetLayouts
-  ]).slice(0, Math.max(24, protectedTargetLayouts.length));
+    ...sorted.slice(0, 24),
+    ...protectedTargetLayouts.slice(0, 8),
+    ...protectedUtilityLayouts
+  ]);
 
   return selected
     .map((candidate) => {
@@ -948,8 +1132,18 @@ export const fetchRecipes = async (): Promise<WynncraftRecipe[]> => {
 };
 
 export const fetchIngredients = async (): Promise<WynncraftIngredient[]> => {
+  const data = await fetchIngredientData();
+  return data.ingredients;
+};
+
+export const fetchIngredientData = async (): Promise<WynncraftIngredientData> => {
   const cache = await fetchCache();
-  if (cache) return cache.ingredients;
+  if (cache) {
+    return {
+      ingredients: cache.ingredients,
+      utilityIngredients: cache.utilityIngredients ?? cache.ingredients.filter(isUtilityIngredient)
+    };
+  }
 
   const response = await fetch(
     `${WYNNCRAFT_API}/item/database?fullResult`,
@@ -957,5 +1151,9 @@ export const fetchIngredients = async (): Promise<WynncraftIngredient[]> => {
   );
   if (!response.ok) throw new Error("Unable to load Wynncraft item data.");
   const items = (await response.json()) as WynncraftIngredient[];
-  return items.filter((item) => item.type === "ingredient");
+  const ingredients = items.filter((item) => item.type === "ingredient");
+  return {
+    ingredients,
+    utilityIngredients: ingredients.filter(isUtilityIngredient)
+  };
 };

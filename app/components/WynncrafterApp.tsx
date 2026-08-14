@@ -28,7 +28,7 @@ import {
   SolverPreferences,
   WynncraftIngredient,
   WynncraftRecipe,
-  fetchIngredients,
+  fetchIngredientData,
   fetchRecipes,
   idLabel,
   identificationRange,
@@ -1257,6 +1257,7 @@ function SidebarFilters({
 export default function WynncrafterApp() {
   const [recipes, setRecipes] = useState<WynncraftRecipe[]>([]);
   const [ingredients, setIngredients] = useState<WynncraftIngredient[]>([]);
+  const [utilityIngredients, setUtilityIngredients] = useState<WynncraftIngredient[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draftProfession, setDraftProfession] = useState<Profession>("armouring");
@@ -1298,11 +1299,12 @@ export default function WynncrafterApp() {
     setUrlHydrated(true);
 
     let mounted = true;
-    Promise.all([fetchRecipes(), fetchIngredients()])
+    Promise.all([fetchRecipes(), fetchIngredientData()])
       .then(([recipeData, ingredientData]) => {
         if (!mounted) return;
         setRecipes(recipeData);
-        setIngredients(ingredientData);
+        setIngredients(ingredientData.ingredients);
+        setUtilityIngredients(ingredientData.utilityIngredients);
         const initialType = getRecipeTypes(recipeData, "armouring")[0] ?? "helmet";
         if (!sharedState) {
           setDraftCraftedType(initialType);
@@ -1371,7 +1373,9 @@ export default function WynncrafterApp() {
     () => {
       const solverPreferences = searchedPreferences;
       const solved = matchingRecipes
-        .flatMap((recipe) => solveRecipe(recipe, ingredients, solverPreferences))
+        .flatMap((recipe) =>
+          solveRecipe(recipe, ingredients, solverPreferences, utilityIngredients)
+        )
         .map((craft) => withMaterialPlan(craft, matchingRecipes, searchedPreferences))
         .filter((craft): craft is SolvedCraft => Boolean(craft));
       const deduped = dedupeByLayoutKeepingLowestLevel(solved).filter((craft) =>
@@ -1401,7 +1405,7 @@ export default function WynncrafterApp() {
         })
         .slice(0, 48);
     },
-    [ingredients, matchingRecipes, searchedPreferences, searchedMaxLevel]
+    [ingredients, matchingRecipes, searchedPreferences, searchedMaxLevel, utilityIngredients]
   );
 
   const selectedCraft = useMemo(() => {

@@ -17,16 +17,23 @@ const [recipes, items] = await Promise.all([
 ]);
 
 const ingredients = items.filter((item) => item.type === "ingredient");
+const utilityIngredients = ingredients.filter(
+  (ingredient) =>
+    (ingredient.itemOnlyIDs?.durabilityModifier ?? 0) > 0 ||
+    (ingredient.consumableOnlyIDs?.duration ?? 0) > 0 ||
+    (ingredient.consumableOnlyIDs?.charges ?? 0) > 0
+);
 const cache = {
   generatedAt: new Date().toISOString(),
   source: apiBase,
   recipes,
-  ingredients
+  ingredients,
+  utilityIngredients
 };
 
 await mkdir(new URL("../public/data/", import.meta.url), { recursive: true });
 await writeFile(outFile, `${JSON.stringify(cache)}\n`, "utf8");
 
 console.log(
-  `Cached ${recipes.length} recipes and ${ingredients.length} ingredients at ${outFile.pathname}`
+  `Cached ${recipes.length} recipes, ${ingredients.length} ingredients, and ${utilityIngredients.length} utility ingredients at ${outFile.pathname}`
 );
