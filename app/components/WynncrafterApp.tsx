@@ -3,6 +3,7 @@
 import {
   AlertCircle,
   ArrowDownUp,
+  Bookmark,
   ChevronRight,
   FlaskConical,
   Gem,
@@ -10,6 +11,7 @@ import {
   Loader2,
   Minus,
   Share2,
+  Trash2,
   Plus,
   Search,
   Shield,
@@ -89,6 +91,45 @@ type SharedSearchState = {
   maxLevel: number;
   preferences: SolverPreferences;
 };
+
+type SavedRecipe = {
+  id: string;
+  url: string;
+  title: string;
+  ingredients: string;
+  targetStats?: SavedRecipeStat[];
+  utilityStats?: SavedRecipeStat[];
+};
+
+type SavedRecipeStat = {
+  label: string;
+  value: string;
+  negative?: boolean;
+};
+
+const savedRecipesStorageKey = "wyndb.saved-recipes.v1";
+
+const normalizeSavedRecipeStats = (value: unknown): SavedRecipeStat[] =>
+  Array.isArray(value)
+    ? value.flatMap((stat) => {
+        if (
+          !stat ||
+          typeof stat !== "object" ||
+          typeof (stat as SavedRecipeStat).label !== "string" ||
+          typeof (stat as SavedRecipeStat).value !== "string"
+        ) {
+          return [];
+        }
+
+        return [
+          {
+            label: (stat as SavedRecipeStat).label,
+            value: (stat as SavedRecipeStat).value,
+            negative: Boolean((stat as SavedRecipeStat).negative)
+          }
+        ];
+      })
+    : [];
 
 const encodeBase64Url = (value: string) =>
   btoa(unescape(encodeURIComponent(value)))
@@ -305,21 +346,7 @@ const recipeRange = (range?: { minimum?: number; maximum?: number; min?: number;
 };
 
 const estimatedRecipeDurabilityRange = (recipe: WynncraftRecipe) => {
-  const base = recipeRange(recipe.durability);
-  if (!supportsDurability(recipe) || recipe.level.maximum <= 105) return base;
-
-  const anchorMin = 525000;
-  const anchorMax = 529000;
-  const perLevelIncrease = 30000;
-  const estimatedMin =
-    anchorMin + Math.max(0, recipe.level.minimum - 105) * perLevelIncrease;
-  const estimatedMax =
-    anchorMax + Math.max(0, recipe.level.maximum - 105) * perLevelIncrease;
-
-  return {
-    min: Math.max(base.min, estimatedMin),
-    max: Math.max(base.max, estimatedMax)
-  };
+  return recipeRange(recipe.durability);
 };
 
 const baseChargesForLevel = (level: number) => {
@@ -795,6 +822,37 @@ function FinalStatsPreview({ craft }: { craft: SolvedCraft }) {
   );
 }
 
+const savedRecipeSummary = (craft: SolvedCraft) => {
+  const targetStats = craft.positives
+    .filter((item) => rangeMidpoint(item.value) !== 0)
+    .map((item) => ({
+      label: idLabel(item.id),
+      value: signedRange(item.value, 1),
+      negative: isNegativeRange(item.value)
+    }));
+  const utilityStats: SavedRecipeStat[] = [];
+
+  if (supportsDurability(craft.recipe)) {
+    utilityStats.push({
+      label: "Dur",
+      value: plainRange(durabilityDisplayRange(finalDurabilityRange(craft)))
+    });
+  }
+  if (supportsDuration(craft.recipe)) {
+    utilityStats.push({ label: "Duration", value: formatDuration(finalDuration(craft)) });
+  }
+  if (supportsConsumableStats(craft.recipe)) {
+    const charges = finalCharges(craft);
+    utilityStats.push({
+      label: "Charges",
+      value: formatNumber(charges, 1),
+      negative: charges < 0
+    });
+  }
+
+  return { targetStats, utilityStats };
+};
+
 function ResultsList({
   results,
   selected,
@@ -857,10 +915,137 @@ function ShareButton({ url }: { url: string }) {
   };
 
   return (
-    <button type="button" className="shareButton" onClick={copyUrl}>
+    <button
+      type="button"
+      className="shareButton"
+      onClick={copyUrl}
+      title={copied ? "Share link copied" : "Copy share link"}
+      aria-label={copied ? "Share link copied" : "Copy share link"}
+    >
       <Share2 size={15} />
-      {copied ? "Copied" : "Share"}
     </button>
+  );
+}
+
+function SaveRecipeButton({
+  saved,
+  onClick
+}: {
+  saved: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={clsx("shareButton", saved && "saveButtonActive")}
+      onClick={onClick}
+      title={saved ? "Recipe saved in this browser" : "Save recipe in this browser"}
+      aria-label={saved ? "Recipe saved in this browser" : "Save recipe in this browser"}
+    >
+      <Bookmark size={15} fill={saved ? "currentColor" : "none"} />
+    </button>
+  );
+}
+
+function SavedRecipeList({
+  recipes,
+  onOpen,
+  onRemove
+}: {
+  recipes: SavedRecipe[];
+  onOpen: (url: string) => void;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="savedRecipeList">
+      {recipes.length ? (
+        recipes.map((recipe) => (
+          <div className="savedRecipeRow" key={recipe.id}>
+            <button
+              type="button"
+              className="savedRecipeOpen"
+              onClick={() => onOpen(recipe.url)}
+              title={`Open ${recipe.title}`}
+            >
+              <strong>{recipe.title}</strong>
+              <span className="savedRecipeIngredients">{recipe.ingredients}</span>
+              {(recipe.targetStats?.length || recipe.utilityStats?.length) && (
+                <span className="savedRecipeSummary">
+                  {recipe.targetStats?.map((stat) => (
+                    <span
+                      key={`target-${stat.label}`}
+                      className={clsx(
+                        "savedRecipeStat",
+                        "savedRecipeTarget",
+                        stat.negative && "negativePill"
+                      )}
+                    >
+                      {stat.label} {stat.value}
+                    </span>
+                  ))}
+                  {recipe.utilityStats?.map((stat) => (
+                    <span
+                      key={`utility-${stat.label}`}
+                      className={clsx(
+                        "savedRecipeStat",
+                        stat.negative && "negativePill"
+                      )}
+                    >
+                      {stat.label} {stat.value}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              className="savedRecipeRemove"
+              onClick={() => onRemove(recipe.id)}
+              title={`Remove ${recipe.title}`}
+              aria-label={`Remove ${recipe.title}`}
+            >
+              <Trash2 size={15} />
+            </button>
+          </div>
+        ))
+      ) : (
+        <span className="savedRecipeEmpty">Save a selected recipe to keep it here.</span>
+      )}
+    </div>
+  );
+}
+
+function SavedRecipesMenu({
+  recipes,
+  onOpen,
+  onRemove
+}: {
+  recipes: SavedRecipe[];
+  onOpen: (url: string) => void;
+  onRemove: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="savedRecipesMenu">
+      <button
+        type="button"
+        className={clsx("savedRecipesTrigger", open && "savedRecipesTriggerOpen")}
+        onClick={() => setOpen((value) => !value)}
+        title="Saved recipes"
+        aria-label="Saved recipes"
+        aria-expanded={open}
+      >
+        <Bookmark size={17} fill={recipes.length ? "currentColor" : "none"} />
+        {recipes.length > 0 && <span className="savedRecipesCount">{recipes.length}</span>}
+      </button>
+      {open && (
+        <div className="savedRecipesPopover">
+          <strong>Saved recipes</strong>
+          <SavedRecipeList recipes={recipes} onOpen={onOpen} onRemove={onRemove} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -953,7 +1138,17 @@ function IngredientStats({
   );
 }
 
-function Workbench({ craft }: { craft: SolvedCraft }) {
+function Workbench({
+  craft,
+  shareUrl,
+  saved,
+  onSave
+}: {
+  craft: SolvedCraft;
+  shareUrl: string;
+  saved: boolean;
+  onSave: () => void;
+}) {
   const baseDurability = estimatedRecipeDurabilityRange(craft.recipe);
   const finalDurability = clampRangeMin(addFlatToRange(baseDurability, craft.durabilityDelta));
   const baseDuration = recipeRange(craft.recipe.duration);
@@ -967,9 +1162,17 @@ function Workbench({ craft }: { craft: SolvedCraft }) {
           <span>Algorithmic layout</span>
           <h2>{titleCase(craft.recipe.type)} workbench</h2>
         </div>
-        <div className="recipeChip">
-          {craft.recipe.skill} {craft.recipe.level.minimum}-{craft.recipe.level.maximum}
-          {craft.materialPlan?.upgradedByTier ? ` - Tier ${craft.materialPlan.tiers[0]?.tier}` : ""}
+        <div className="workbenchActions">
+          <div className="recipeChip">
+            {craft.recipe.skill} {craft.recipe.level.minimum}-{craft.recipe.level.maximum}
+            {craft.materialPlan?.upgradedByTier ? ` - Tier ${craft.materialPlan.tiers[0]?.tier}` : ""}
+          </div>
+          {shareUrl && (
+            <div className="resultActions">
+              <SaveRecipeButton saved={saved} onClick={onSave} />
+              <ShareButton url={shareUrl} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -1440,6 +1643,42 @@ export default function WynncrafterApp() {
   const [searchedPreferences, setSearchedPreferences] = useState<SolverPreferences>(draftPreferences);
   const [shareUrl, setShareUrl] = useState("");
   const [urlHydrated, setUrlHydrated] = useState(false);
+  const [savedRecipes, setSavedRecipes] = useState<SavedRecipe[]>([]);
+  const [savedRecipesLoaded, setSavedRecipesLoaded] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(savedRecipesStorageKey);
+      const parsed = stored ? (JSON.parse(stored) as SavedRecipe[]) : [];
+      setSavedRecipes(
+        Array.isArray(parsed)
+          ? parsed.flatMap((recipe) =>
+              typeof recipe?.id === "string" &&
+              typeof recipe?.url === "string" &&
+              typeof recipe?.title === "string" &&
+              typeof recipe?.ingredients === "string"
+                ? [
+                    {
+                      ...recipe,
+                      targetStats: normalizeSavedRecipeStats(recipe.targetStats),
+                      utilityStats: normalizeSavedRecipeStats(recipe.utilityStats)
+                    }
+                  ]
+                : []
+            )
+          : []
+      );
+    } catch {
+      setSavedRecipes([]);
+    } finally {
+      setSavedRecipesLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!savedRecipesLoaded) return;
+    window.localStorage.setItem(savedRecipesStorageKey, JSON.stringify(savedRecipes));
+  }, [savedRecipes, savedRecipesLoaded]);
 
   useEffect(() => {
     const sharedState =
@@ -1620,6 +1859,39 @@ export default function WynncrafterApp() {
     }),
     [ingredients, recipes]
   );
+  const selectedRecipeSaved = Boolean(
+    shareUrl && savedRecipes.some((recipe) => recipe.id === shareUrl)
+  );
+
+  const saveSelectedRecipe = () => {
+    if (!selectedCraft || !shareUrl) return;
+    const ingredientNames = Array.from(
+      new Set(
+        selectedCraft.grid
+          .filter((ingredient): ingredient is WynncraftIngredient => Boolean(ingredient))
+          .map((ingredient) => ingredient.displayName)
+      )
+    );
+    const recipe: SavedRecipe = {
+      id: shareUrl,
+      url: shareUrl,
+      title: `${titleCase(selectedCraft.recipe.type)} ${selectedCraft.recipe.level.minimum}-${selectedCraft.recipe.level.maximum}`,
+      ingredients: ingredientNames.join(" + "),
+      ...savedRecipeSummary(selectedCraft)
+    };
+
+    setSavedRecipes((recipes) =>
+      [recipe, ...recipes.filter((savedRecipe) => savedRecipe.id !== recipe.id)].slice(0, 30)
+    );
+  };
+
+  const openSavedRecipe = (url: string) => {
+    window.location.assign(url);
+  };
+
+  const removeSavedRecipe = (id: string) => {
+    setSavedRecipes((recipes) => recipes.filter((recipe) => recipe.id !== id));
+  };
 
   return (
     <main className="appShell">
@@ -1639,17 +1911,23 @@ export default function WynncrafterApp() {
         onSearch={applySearch}
         hasPendingChanges={hasPendingChanges}
       />
+      <SavedRecipesMenu
+        recipes={savedRecipes}
+        onOpen={openSavedRecipe}
+        onRemove={removeSavedRecipe}
+      />
 
       <div className="mainPane">
         <header className="topBar">
           <div>
-            <span className="eyebrow">Static GitHub Pages - Wynncraft API v3</span>
             <h1>Find craftable recipes from live Wynncraft data.</h1>
           </div>
-          <div className="topMetrics">
-            <Metric label="Recipes" value={loading ? "..." : formatNumber(dataStats.recipes)} />
-            <Metric label="Ingredients" value={loading ? "..." : formatNumber(dataStats.ingredients)} />
-            <Metric label="IDs" value={loading ? "..." : formatNumber(dataStats.ids)} />
+          <div className="topActions">
+            <div className="topMetrics">
+              <Metric label="Recipes" value={loading ? "..." : formatNumber(dataStats.recipes)} />
+              <Metric label="Ingredients" value={loading ? "..." : formatNumber(dataStats.ingredients)} />
+              <Metric label="IDs" value={loading ? "..." : formatNumber(dataStats.ids)} />
+            </div>
           </div>
         </header>
 
@@ -1678,7 +1956,6 @@ export default function WynncrafterApp() {
                   <span>Ranked recipes</span>
                   <h2>{solvedRecipes.length} matches</h2>
                 </div>
-                {shareUrl && <ShareButton url={shareUrl} />}
               </div>
               <ResultsList
                 results={solvedRecipes}
@@ -1690,7 +1967,12 @@ export default function WynncrafterApp() {
             <div className="craftPane">
               {selectedCraft ? (
                 <>
-                  <Workbench craft={selectedCraft} />
+                  <Workbench
+                    craft={selectedCraft}
+                    shareUrl={shareUrl}
+                    saved={selectedRecipeSaved}
+                    onSave={saveSelectedRecipe}
+                  />
                   <DetailPanel craft={selectedCraft} />
                   <p className="sourceNote">
                     Recipe bases and ingredient stats are fetched in the browser from the
