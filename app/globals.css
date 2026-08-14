@@ -859,6 +859,19 @@ h3 {
   padding: 14px 14px 14px 38px;
 }
 
+.ingredientSlotButton {
+  width: 100%;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ingredientSlotButton:hover,
+.ingredientSlotSelected {
+  border-color: var(--teal);
+  box-shadow: inset 0 0 0 1px rgba(34, 124, 120, 0.18);
+}
+
 .ingredientSlot strong {
   overflow-wrap: anywhere;
   line-height: 1.15;
@@ -945,6 +958,76 @@ h3 {
   font-weight: 900;
 }
 
+.swapPanel {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.swapPanelHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.swapPanelHeading strong {
+  font-size: 0.9rem;
+}
+
+.swapPanelHeading button {
+  border: 0;
+  background: transparent;
+  color: #8a5b00;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.swapOptions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  max-height: 290px;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+
+.swapOption {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 8px;
+  text-align: left;
+}
+
+.swapOption:hover,
+.swapOptionSelected {
+  border-color: var(--teal);
+  background: #e1f1ed;
+}
+
+.swapOption span,
+.swapOption small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swapOption span {
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.swapOption small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
 .statsPanel {
   grid-template-columns: 1fr;
 }
@@ -1003,6 +1086,22 @@ h3 {
   margin: 0;
 }
 
+.marketCostVisibility {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-strong);
+  color: #8a5b00;
+}
+
+.marketCostVisibility:hover {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+
 .marketCostTotal {
   color: var(--green);
   font-size: 0.94rem;
@@ -1054,9 +1153,33 @@ h3 {
   margin-top: 10px;
 }
 
+.budgetControlRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.budgetMaterialToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 42px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.budgetMaterialToggle input {
+  accent-color: var(--teal);
+  margin: 0;
+}
+
 .details {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.5fr) minmax(240px, 1fr);
   gap: 18px;
 }
 
@@ -1068,6 +1191,23 @@ h3 {
   color: var(--muted);
   font-size: 0.92rem;
   line-height: 1.45;
+}
+
+.craftedStats {
+  display: grid;
+  gap: 16px;
+}
+
+.craftedStatsGroup {
+  display: grid;
+  gap: 7px;
+}
+
+.craftedStatsLabel {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 900;
+  text-transform: uppercase;
 }
 
 .statList {
@@ -1091,6 +1231,43 @@ h3 {
 
 .statRow strong {
   color: var(--teal);
+}
+
+.materialSwapButton {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+.materialSwapButton:hover span,
+.materialSwapButtonSelected span {
+  color: #8a5b00;
+}
+
+.materialTierOptions {
+  display: flex;
+  gap: 6px;
+  padding: 7px 0 2px;
+}
+
+.materialTierOptions button {
+  min-width: 34px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  padding: 4px 7px;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.materialTierOptions .materialTierSelected {
+  border-color: #b88419;
+  background: #f3dfad;
+  color: #8a5b00;
 }
 
 .targetStatRow span,
@@ -1202,6 +1379,10 @@ h3 {
 
   .craftGrid {
     grid-auto-rows: minmax(96px, 1fr);
+  }
+
+  .swapOptions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   h1 {

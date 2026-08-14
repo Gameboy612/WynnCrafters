@@ -6,6 +6,8 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
+  Eye,
+  EyeOff,
   FlaskConical,
   Gem,
   Hammer,
@@ -37,6 +39,7 @@ import {
   fetchIngredientData,
   fetchMarketPriceCache,
   fetchRecipes,
+  aggregateCraft,
   idLabel,
   identificationRange,
   rangeMidpoint,
@@ -115,6 +118,7 @@ type SavedRecipeStat = {
 
 const savedRecipesStorageKey = "wyndb.saved-recipes.v1";
 const includeMaterialCostsStorageKey = "wyndb.include-material-costs.v1";
+const showCraftCostStorageKey = "wyndb.show-craft-cost.v1";
 
 const normalizeSavedRecipeStats = (value: unknown): SavedRecipeStat[] =>
   Array.isArray(value)
@@ -1024,13 +1028,15 @@ function ResultsList({
   selected,
   onSelect,
   priceCache,
-  includeMaterialCosts
+  includeMaterialCosts,
+  showCraftCost
 }: {
   results: SolvedCraft[];
   selected: string | null;
   onSelect: (internalName: string) => void;
   priceCache: WynnventoryPriceCache | null;
   includeMaterialCosts: boolean;
+  showCraftCost: boolean;
 }) {
   const resultsPerPage = 8;
   const [page, setPage] = useState(0);
@@ -1108,7 +1114,7 @@ function ResultsList({
                 <FinalStatsPreview craft={result} />
               </div>
               <div className="resultCardAside">
-                {cost !== null && (
+                {showCraftCost && cost !== null && (
                   <span className="costBadge">{formatEmeralds(cost)}</span>
                 )}
                 <div className={clsx("scoreBadge", scoreTone(result.score))}>
@@ -1360,11 +1366,15 @@ function MarketCost({
   craft,
   priceCache,
   includeMaterialCosts,
+  showCraftCost,
+  onShowCraftCostChange,
   onIncludeMaterialCostsChange
 }: {
   craft: SolvedCraft;
   priceCache: WynnventoryPriceCache | null;
   includeMaterialCosts: boolean;
+  showCraftCost: boolean;
+  onShowCraftCostChange: (value: boolean) => void;
   onIncludeMaterialCostsChange: (value: boolean) => void;
 }) {
   const inputs = useMemo(
@@ -1402,8 +1412,20 @@ function MarketCost({
             />
             <span>Materials</span>
           </label>
+          <button
+            type="button"
+            className="marketCostVisibility"
+            onClick={() => onShowCraftCostChange(!showCraftCost)}
+            title={showCraftCost ? "Hide craft costs" : "Show craft costs"}
+            aria-label={showCraftCost ? "Hide craft costs" : "Show craft costs"}
+            aria-pressed={showCraftCost}
+          >
+            {showCraftCost ? <Eye size={16} /> : <EyeOff size={16} />}
+          </button>
           {priceCache?.generatedAt && (
-            <strong className="marketCostTotal">{formatEmeralds(knownCost)}</strong>
+            showCraftCost && (
+              <strong className="marketCostTotal">{formatEmeralds(knownCost)}</strong>
+            )
           )}
         </div>
       </div>
@@ -1412,7 +1434,7 @@ function MarketCost({
       {priceCache && !priceCache.generatedAt && (
         <p>Market price cache has not been generated yet.</p>
       )}
-      {priceCache?.generatedAt && (
+      {priceCache?.generatedAt && showCraftCost && (
         <>
           <div className="marketCostList">
             {pricedInputs.map((input) => (
@@ -1448,7 +1470,11 @@ function Workbench({
   onSave,
   priceCache,
   includeMaterialCosts,
-  onIncludeMaterialCostsChange
+  showCraftCost,
+  onShowCraftCostChange,
+  onIncludeMaterialCostsChange,
+  swapIngredients,
+  onSwapIngredient
 }: {
   craft: SolvedCraft;
   shareUrl: string;
@@ -1456,8 +1482,14 @@ function Workbench({
   onSave: () => void;
   priceCache: WynnventoryPriceCache | null;
   includeMaterialCosts: boolean;
+  showCraftCost: boolean;
+  onShowCraftCostChange: (value: boolean) => void;
   onIncludeMaterialCostsChange: (value: boolean) => void;
+  swapIngredients: WynncraftIngredient[];
+  onSwapIngredient: (slot: number, ingredient: WynncraftIngredient | null) => void;
 }) {
+  const [swapSlot, setSwapSlot] = useState<number | null>(null);
+  const [swapQuery, setSwapQuery] = useState("");
   const baseDurability = estimatedRecipeDurabilityRange(craft.recipe);
   const finalDurability = clampRangeMin(addFlatToRange(baseDurability, craft.durabilityDelta));
   const baseDuration = recipeRange(craft.recipe.duration);
@@ -1465,6 +1497,20 @@ function Workbench({
   const baseHealthOrDamage = recipeRange(craft.recipe.healthOrDamage);
   const healthOrDamageHasValue =
     baseHealthOrDamage.min !== 0 || baseHealthOrDamage.max !== 0;
+  const swapOptions = useMemo(() => {
+    const normalizedQuery = swapQuery.trim().toLowerCase();
+
+    return swapIngredients
+      .filter((ingredient) =>
+        !normalizedQuery ||
+        ingredient.displayName.toLowerCase().includes(normalizedQuery)
+      )
+      .slice(0, normalizedQuery ? 48 : 18);
+  }, [swapIngredients, swapQuery]);
+
+  useEffect(() => {
+    setSwapQuery("");
+  }, [swapSlot]);
 
   return (
     <section className="workbench">
@@ -1490,7 +1536,17 @@ function Workbench({
       <div className="gridAndStats">
         <div className="craftGrid" aria-label="2 by 3 crafting grid">
           {craft.grid.map((ingredient, index) => (
-            <div className="ingredientSlot" key={`${ingredient?.internalName ?? "empty"}-${index}`}>
+            <button
+              type="button"
+              className={clsx(
+                "ingredientSlot",
+                "ingredientSlotButton",
+                swapSlot === index && "ingredientSlotSelected"
+              )}
+              key={`${ingredient?.internalName ?? "empty"}-${index}`}
+              onClick={() => setSwapSlot(index)}
+              title={`Swap ingredient in slot ${index + 1}`}
+            >
               <span className="slotIndex">{index + 1}</span>
               {ingredient ? (
                 <>
@@ -1509,7 +1565,7 @@ function Workbench({
               ) : (
                 <em>Open slot</em>
               )}
-            </div>
+            </button>
           ))}
         </div>
 
@@ -1569,65 +1625,185 @@ function Workbench({
           )}
         </div>
       </div>
+      {swapSlot !== null && (
+        <div className="swapPanel">
+          <div className="swapPanelHeading">
+            <strong>Swap slot {swapSlot + 1}</strong>
+            <button type="button" onClick={() => setSwapSlot(null)}>
+              Close
+            </button>
+          </div>
+          <div className="inputWithIcon">
+            <Search size={15} />
+            <input
+              value={swapQuery}
+              onChange={(event) => setSwapQuery(event.target.value)}
+              placeholder="Search compatible ingredients..."
+              aria-label={`Search ingredients for slot ${swapSlot + 1}`}
+              autoFocus
+            />
+          </div>
+          <div className="swapOptions">
+            <button
+              type="button"
+              className="swapOption"
+              onClick={() => {
+                onSwapIngredient(swapSlot, null);
+                setSwapSlot(null);
+              }}
+            >
+              Clear slot
+            </button>
+            {swapOptions.map((ingredient) => (
+              <button
+                type="button"
+                className={clsx(
+                  "swapOption",
+                  craft.grid[swapSlot]?.internalName === ingredient.internalName &&
+                    "swapOptionSelected"
+                )}
+                key={ingredient.internalName}
+                onClick={() => {
+                  onSwapIngredient(swapSlot, ingredient);
+                  setSwapSlot(null);
+                }}
+              >
+                <span>{ingredient.displayName}</span>
+                <small>
+                  Lv {ingredient.requirements?.level ?? 1} - {tierLabel(ingredient.tier)}
+                </small>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <MarketCost
         craft={craft}
         priceCache={priceCache}
         includeMaterialCosts={includeMaterialCosts}
+        showCraftCost={showCraftCost}
+        onShowCraftCostChange={onShowCraftCostChange}
         onIncludeMaterialCostsChange={onIncludeMaterialCostsChange}
       />
     </section>
   );
 }
 
-function DetailPanel({ craft }: { craft: SolvedCraft }) {
+function DetailPanel({
+  craft,
+  onMaterialTierChange
+}: {
+  craft: SolvedCraft;
+  onMaterialTierChange: (materialName: string, tier: 1 | 2 | 3) => void;
+}) {
+  const [activeMaterial, setActiveMaterial] = useState<string | null>(null);
   const requirements = Object.entries(craft.requirements).filter(([, value]) => value !== 0);
+  const targetedIds = new Set(craft.positives.map((item) => item.id));
+  const craftedStats = Object.entries(craft.ids)
+    .filter(([, value]) => rangeMidpoint(value) !== 0)
+    .sort(([, left], [, right]) => Math.abs(rangeMidpoint(right)) - Math.abs(rangeMidpoint(left)));
+  const regularStats = craftedStats.filter(
+    ([id, value]) => !targetedIds.has(id) && rangeMidpoint(value) > 0
+  );
+  const negativeStats = craftedStats.filter(([, value]) => rangeMidpoint(value) < 0);
 
   return (
     <section className="details">
       <div className="detailColumn">
-        <h3>Target gains</h3>
-        {craft.positives.length ? (
-          <div className="statList">
-            {craft.positives.map((item) => (
-              <div key={item.id} className="statRow targetStatRow">
-                <span>{idLabel(item.id)}</span>
-                <strong>{signedRange(item.value, 1)}</strong>
+        <h3>Crafted stats</h3>
+        <div className="craftedStats">
+          {craft.positives.length > 0 && (
+            <div className="craftedStatsGroup">
+              <span className="craftedStatsLabel">Targeted</span>
+              <div className="statList">
+                {craft.positives.map((item) => (
+                  <div key={item.id} className="statRow targetStatRow">
+                    <span>{idLabel(item.id)}</span>
+                    <strong>{signedRange(item.value, 1)}</strong>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : (
-          <p>No selected target IDs are present in this layout.</p>
-        )}
-      </div>
-
-      <div className="detailColumn">
-        <h3>Watch list</h3>
-        {craft.penalties.length ? (
-          <div className="statList">
-            {craft.penalties.map((item) => (
-              <div key={item.id} className="statRow mutedRow">
-                <span>{idLabel(item.id)}</span>
-                <strong>{signedRange(item.value, 1)}</strong>
+            </div>
+          )}
+          {regularStats.length > 0 && (
+            <div className="craftedStatsGroup">
+              <span className="craftedStatsLabel">Other gains</span>
+              <div className="statList">
+                {regularStats.map(([id, value]) => (
+                  <div key={id} className="statRow">
+                    <span>{idLabel(id)}</span>
+                    <strong>{signedRange(value, 1)}</strong>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ) : (
-          <p>No avoided IDs were introduced by the selected ingredients.</p>
-        )}
+            </div>
+          )}
+          {negativeStats.length > 0 && (
+            <div className="craftedStatsGroup">
+              <span className="craftedStatsLabel">Negative effects</span>
+              <div className="statList">
+                {negativeStats.map(([id, value]) => (
+                  <div key={id} className="statRow mutedRow">
+                    <span>{idLabel(id)}</span>
+                    <strong>{signedRange(value, 1)}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {!craftedStats.length && <p>No ingredient stats are present in this layout.</p>}
+        </div>
       </div>
 
       <div className="detailColumn">
         <h3>Materials</h3>
         <div className="statList">
           {craft.recipe.materials.map((material) => (
-            <div key={material.item} className="statRow">
-              <span>{material.item}</span>
-              <strong>
-                x{material.amount}
-                {craft.materialPlan
-                  ? ` T${craft.materialPlan.tiers.find((item) => item.item === material.item)?.tier ?? 1}`
-                  : ""}
-              </strong>
+            <div key={material.item}>
+              <button
+                type="button"
+                className={clsx(
+                  "statRow",
+                  "materialSwapButton",
+                  activeMaterial === material.item && "materialSwapButtonSelected"
+                )}
+                onClick={() =>
+                  setActiveMaterial((current) =>
+                    current === material.item ? null : material.item
+                  )
+                }
+                title={`Change ${material.item} tier`}
+              >
+                <span>{material.item}</span>
+                <strong>
+                  x{material.amount}
+                  {craft.materialPlan
+                    ? ` T${craft.materialPlan.tiers.find((item) => item.item === material.item)?.tier ?? 1}`
+                    : ""}
+                </strong>
+              </button>
+              {activeMaterial === material.item && (
+                <div className="materialTierOptions">
+                  {([1, 2, 3] as const).map((tier) => (
+                    <button
+                      type="button"
+                      className={clsx(
+                        (craft.materialPlan?.tiers.find(
+                          (item) => item.item === material.item
+                        )?.tier ??
+                          1) === tier && "materialTierSelected"
+                      )}
+                      key={tier}
+                      onClick={() => {
+                        onMaterialTierChange(material.item, tier);
+                        setActiveMaterial(null);
+                      }}
+                    >
+                      T{tier}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -1671,6 +1847,8 @@ function SidebarFilters({
   setMaxLevel,
   preferences,
   setPreferences,
+  includeMaterialCosts,
+  setIncludeMaterialCosts,
   onSearch,
   hasPendingChanges
 }: {
@@ -1686,6 +1864,8 @@ function SidebarFilters({
   setMaxLevel: (level: number) => void;
   preferences: SolverPreferences;
   setPreferences: (preferences: SolverPreferences) => void;
+  includeMaterialCosts: boolean;
+  setIncludeMaterialCosts: (value: boolean) => void;
   onSearch: (
     minLevel: number,
     maxLevel: number,
@@ -1861,16 +2041,26 @@ function SidebarFilters({
         />
       </div>
 
-      <div className="controlGroup">
-        <label htmlFor="max-budget">Max budget</label>
-        <input
-          id="max-budget"
-          className={clsx(parseEmeraldBudget(budgetInput) === null && "inputInvalid")}
-          value={budgetInput}
-          onChange={(event) => setBudgetInput(event.target.value)}
-          placeholder="e.g. 1.5stx or 32eb 10e"
-          inputMode="text"
-        />
+      <div className="budgetControlRow">
+        <div className="controlGroup">
+          <label htmlFor="max-budget">Max budget</label>
+          <input
+            id="max-budget"
+            className={clsx(parseEmeraldBudget(budgetInput) === null && "inputInvalid")}
+            value={budgetInput}
+            onChange={(event) => setBudgetInput(event.target.value)}
+            placeholder="e.g. 1.5stx or 32eb 10e"
+            inputMode="text"
+          />
+        </div>
+        <label className="budgetMaterialToggle">
+          <input
+            type="checkbox"
+            checked={includeMaterialCosts}
+            onChange={(event) => setIncludeMaterialCosts(event.target.checked)}
+          />
+          <span>Materials</span>
+        </label>
       </div>
 
       {(showDurabilityMinimum || showDurationMinimum || showChargesMinimum) && (
@@ -2014,6 +2204,7 @@ export default function WynncrafterApp() {
   const [searchedMinLevel, setSearchedMinLevel] = useState(1);
   const [searchedMaxLevel, setSearchedMaxLevel] = useState(120);
   const [selectedRecipe, setSelectedRecipe] = useState<string | null>(null);
+  const [manualCraft, setManualCraft] = useState<SolvedCraft | null>(null);
   const [draftPreferences, setDraftPreferences] =
     useState<SolverPreferences>(defaultPreferences);
   const [searchedPreferences, setSearchedPreferences] = useState<SolverPreferences>(draftPreferences);
@@ -2023,6 +2214,9 @@ export default function WynncrafterApp() {
   const [savedRecipesLoaded, setSavedRecipesLoaded] = useState(false);
   const [includeMaterialCosts, setIncludeMaterialCosts] = useState(true);
   const [materialCostsLoaded, setMaterialCostsLoaded] = useState(false);
+  const [showCraftCost, setShowCraftCost] = useState(true);
+  const [craftCostVisibilityLoaded, setCraftCostVisibilityLoaded] = useState(false);
+  const [searchedIncludeMaterialCosts, setSearchedIncludeMaterialCosts] = useState(true);
 
   useEffect(() => {
     try {
@@ -2064,6 +2258,16 @@ export default function WynncrafterApp() {
     );
     setMaterialCostsLoaded(true);
   }, []);
+
+  useEffect(() => {
+    setShowCraftCost(window.localStorage.getItem(showCraftCostStorageKey) !== "false");
+    setCraftCostVisibilityLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!craftCostVisibilityLoaded) return;
+    window.localStorage.setItem(showCraftCostStorageKey, String(showCraftCost));
+  }, [craftCostVisibilityLoaded, showCraftCost]);
 
   useEffect(() => {
     if (!materialCostsLoaded) return;
@@ -2130,6 +2334,7 @@ export default function WynncrafterApp() {
       draftCraftedType !== searchedCraftedType ||
       draftMinLevel !== searchedMinLevel ||
       draftMaxLevel !== searchedMaxLevel ||
+      includeMaterialCosts !== searchedIncludeMaterialCosts ||
       JSON.stringify(draftPreferences) !== JSON.stringify(searchedPreferences),
     [
       draftCraftedType,
@@ -2137,7 +2342,9 @@ export default function WynncrafterApp() {
       draftMinLevel,
       draftPreferences,
       draftProfession,
+      includeMaterialCosts,
       searchedCraftedType,
+      searchedIncludeMaterialCosts,
       searchedMaxLevel,
       searchedMinLevel,
       searchedPreferences,
@@ -2157,7 +2364,9 @@ export default function WynncrafterApp() {
     setSearchedMinLevel(minLevel);
     setSearchedMaxLevel(maxLevel);
     setSearchedPreferences(preferences);
+    setSearchedIncludeMaterialCosts(includeMaterialCosts);
     setSelectedRecipe(null);
+    setManualCraft(null);
   };
 
   const matchingRecipes = useMemo(
@@ -2335,7 +2544,11 @@ export default function WynncrafterApp() {
         .filter((craft): craft is SolvedCraft => Boolean(craft))
         .filter((craft) => {
           if (searchedPreferences.maxBudget === undefined) return true;
-          const cost = craftMarketCost(craft, marketPriceCache, includeMaterialCosts);
+          const cost = craftMarketCost(
+            craft,
+            marketPriceCache,
+            searchedIncludeMaterialCosts
+          );
           return cost !== null && cost <= searchedPreferences.maxBudget;
         });
       const deduped = dedupeByLayoutKeepingLowestLevel(solved).filter((craft) =>
@@ -2371,12 +2584,12 @@ export default function WynncrafterApp() {
       searchedBudgetIngredients,
       searchedMaxLevel,
       searchedPreferences,
-      includeMaterialCosts,
+      searchedIncludeMaterialCosts,
       searchedBudgetUtilityIngredients
     ]
   );
 
-  const selectedCraft = useMemo(() => {
+  const baseSelectedCraft = useMemo(() => {
     if (!solvedRecipes.length) return null;
     return (
       solvedRecipes.find(
@@ -2387,6 +2600,168 @@ export default function WynncrafterApp() {
       solvedRecipes[0]
     );
   }, [selectedRecipe, solvedRecipes]);
+  const selectedCraft = manualCraft ?? baseSelectedCraft;
+
+  const manualIngredientOptions = useMemo(() => {
+    if (!selectedCraft) return [];
+
+    const maxIngredientLevel = Math.min(
+      selectedCraft.recipe.level.maximum,
+      searchedPreferences.maxIngredientLevel ?? selectedCraft.recipe.level.maximum
+    );
+    const unique = new Map<string, WynncraftIngredient>();
+    [...searchedBudgetIngredients, ...searchedBudgetUtilityIngredients].forEach((ingredient) => {
+      unique.set(ingredient.internalName, ingredient);
+    });
+
+    return Array.from(unique.values())
+      .filter(
+        (ingredient) =>
+          ingredient.requirements?.skills?.includes(selectedCraft.recipe.skill) &&
+          (ingredient.requirements.level ?? 1) <= maxIngredientLevel
+      )
+      .sort(
+        (left, right) =>
+          (left.requirements?.level ?? 1) - (right.requirements?.level ?? 1) ||
+          left.displayName.localeCompare(right.displayName)
+      );
+  }, [
+    searchedBudgetIngredients,
+    searchedBudgetUtilityIngredients,
+    searchedPreferences.maxIngredientLevel,
+    selectedCraft
+  ]);
+
+  const rebuildManualCraft = (
+    source: SolvedCraft,
+    grid: SolvedCraft["grid"],
+    recipe = source.recipe,
+    materialPlan = source.materialPlan
+  ) => {
+    const aggregate = aggregateCraft(grid);
+    const entries = Object.entries(aggregate.ids).sort(
+      ([, left], [, right]) => Math.abs(rangeMidpoint(right)) - Math.abs(rangeMidpoint(left))
+    );
+    const nextCraft: SolvedCraft = {
+      ...source,
+      recipe,
+      grid,
+      ids: aggregate.ids,
+      positives: entries
+        .filter(
+          ([id, value]) =>
+            rangeMidpoint(value) > 0 && searchedPreferences.targetIds.includes(id)
+        )
+        .slice(0, 8)
+        .map(([id, value]) => ({ id, value })),
+      penalties: entries
+        .filter(
+          ([id, value]) =>
+            rangeMidpoint(value) !== 0 && searchedPreferences.avoidIds.includes(id)
+        )
+        .slice(0, 6)
+        .map(([id, value]) => ({ id, value })),
+      durabilityDelta: aggregate.durabilityDelta,
+      chargesDelta: aggregate.chargesDelta,
+      durationDelta: aggregate.durationDelta,
+      requirements: aggregate.requirements,
+      effectiveness: aggregate.effectiveness,
+      notes: [...source.notes.filter((note) => note !== "Manual workbench edit"), "Manual workbench edit"],
+      materialPlan
+    };
+    const baselines = buildCraftBaselines(
+      [...solvedRecipes, nextCraft],
+      [...searchedPreferences.targetIds, ...searchedPreferences.avoidIds]
+    );
+
+    return {
+      ...nextCraft,
+      score: Math.max(
+        0,
+        Math.round(
+          (targetScore(nextCraft, searchedPreferences.targetIds, baselines) -
+            avoidScore(nextCraft, searchedPreferences.avoidIds, baselines)) *
+            100
+        )
+      )
+    };
+  };
+
+  const updateManualIngredient = (slot: number, ingredient: WynncraftIngredient | null) => {
+    if (!selectedCraft) return;
+
+    const grid = [...selectedCraft.grid];
+    grid[slot] = ingredient;
+    const sourceRecipe =
+      selectedCraft.materialPlan &&
+      recipes.find(
+        (recipe) =>
+          recipe.internalName === selectedCraft.materialPlan?.sourceRecipeInternalName
+      );
+    const baseRecipe = sourceRecipe ?? selectedCraft.recipe;
+    const recipe = selectedCraft.materialPlan
+      ? applyMaterialPlanToRecipe(
+          baseRecipe,
+          selectedCraft.materialPlan,
+          grid.some((entry) => Boolean(entry))
+        )
+      : supportsConsumableStats(baseRecipe) && grid.some((entry) => Boolean(entry))
+        ? { ...baseRecipe, healthOrDamage: { minimum: 0, maximum: 0 } }
+        : baseRecipe;
+
+    setManualCraft(rebuildManualCraft(selectedCraft, grid, recipe));
+  };
+
+  const updateManualMaterialTier = (materialName: string, tier: 1 | 2 | 3) => {
+    if (!selectedCraft) return;
+
+    const sourceRecipe =
+      (selectedCraft.materialPlan &&
+        recipes.find(
+          (recipe) =>
+            recipe.internalName === selectedCraft.materialPlan?.sourceRecipeInternalName
+        )) ??
+      selectedCraft.recipe;
+    const currentPlan = selectedCraft.materialPlan ?? {
+      sourceRecipeInternalName: sourceRecipe.internalName,
+      sourceLevel: sourceRecipe.level,
+      utilityBoostPercent: 0,
+      upgradedByLevel: false,
+      upgradedByTier: false,
+      tiers: sourceRecipe.materials.map((material) => ({ ...material, tier: 1 as const }))
+    };
+    const tiers = currentPlan.tiers.map((material) =>
+      material.item === materialName ? { ...material, tier } : material
+    );
+    const totalMaterialAmount = tiers.reduce((total, material) => total + material.amount, 0);
+    const utilityBoostPercent = tiers.reduce(
+      (total, material) =>
+        total +
+        (material.amount / totalMaterialAmount) *
+          (materialTierBoosts.default[material.tier - 1] ?? 0),
+      0
+    );
+    const materialPlan = {
+      ...currentPlan,
+      utilityBoostPercent,
+      upgradedByTier: tiers.some((material) => material.tier > 1),
+      tiers
+    };
+    const recipe = applyMaterialPlanToRecipe(
+      sourceRecipe,
+      materialPlan,
+      selectedCraft.grid.some((ingredient) => Boolean(ingredient))
+    );
+
+    setManualCraft(
+      rebuildManualCraft(selectedCraft, selectedCraft.grid, recipe, materialPlan)
+    );
+  };
+
+  const selectRecipe = (key: string) => {
+    setManualCraft(null);
+    setSelectedRecipe(key);
+  };
 
   useEffect(() => {
     if (typeof window === "undefined" || !urlHydrated) return;
@@ -2471,6 +2846,8 @@ export default function WynncrafterApp() {
         setMaxLevel={setDraftMaxLevel}
         preferences={draftPreferences}
         setPreferences={setDraftPreferences}
+        includeMaterialCosts={includeMaterialCosts}
+        setIncludeMaterialCosts={setIncludeMaterialCosts}
         onSearch={applySearch}
         hasPendingChanges={hasPendingChanges}
       />
@@ -2523,9 +2900,10 @@ export default function WynncrafterApp() {
               <ResultsList
                 results={solvedRecipes}
                 selected={selectedCraft ? craftSelectionKey(selectedCraft) : null}
-                onSelect={setSelectedRecipe}
+                onSelect={selectRecipe}
                 priceCache={marketPriceCache}
                 includeMaterialCosts={includeMaterialCosts}
+                showCraftCost={showCraftCost}
               />
             </section>
 
@@ -2539,9 +2917,16 @@ export default function WynncrafterApp() {
                     onSave={saveSelectedRecipe}
                     priceCache={marketPriceCache}
                     includeMaterialCosts={includeMaterialCosts}
+                    showCraftCost={showCraftCost}
+                    onShowCraftCostChange={setShowCraftCost}
                     onIncludeMaterialCostsChange={setIncludeMaterialCosts}
+                    swapIngredients={manualIngredientOptions}
+                    onSwapIngredient={updateManualIngredient}
                   />
-                  <DetailPanel craft={selectedCraft} />
+                  <DetailPanel
+                    craft={selectedCraft}
+                    onMaterialTierChange={updateManualMaterialTier}
+                  />
                   <p className="sourceNote">
                     Recipe bases and ingredient stats are fetched in the browser from the
                     Wynncraft API. Effectiveness is estimated from each ingredient&apos;s
