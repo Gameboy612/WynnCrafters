@@ -4,6 +4,7 @@ import {
   AlertCircle,
   ArrowDownUp,
   Bookmark,
+  ChevronLeft,
   ChevronRight,
   FlaskConical,
   Gem,
@@ -70,7 +71,8 @@ const defaultPreferences: SolverPreferences = {
   bannedIngredients: "",
   minDurability: 30,
   minDuration: 60,
-  minCharges: 0
+  minCharges: 0,
+  maxBudget: undefined
 };
 
 const professionCodes: Record<Profession, string> = {
@@ -157,7 +159,13 @@ const normalizePreferences = (value: Partial<SolverPreferences> = {}): SolverPre
   maxIngredients: MAX_INGREDIENT_POOL_SIZE,
   minDurability: Number(value.minDurability ?? defaultPreferences.minDurability),
   minDuration: Number(value.minDuration ?? defaultPreferences.minDuration),
-  minCharges: Number(value.minCharges ?? defaultPreferences.minCharges)
+  minCharges: Number(value.minCharges ?? defaultPreferences.minCharges),
+  maxBudget:
+    typeof value.maxBudget === "number" &&
+    Number.isFinite(value.maxBudget) &&
+    value.maxBudget >= 0
+      ? Math.round(value.maxBudget)
+      : undefined
 });
 
 const compactStateFields = (state: SharedSearchState) => {
@@ -180,7 +188,8 @@ const compactStateFields = (state: SharedSearchState) => {
       : String(preferences.minDuration),
     preferences.minCharges === defaultPreferences.minCharges
       ? ""
-      : String(preferences.minCharges)
+      : String(preferences.minCharges),
+    preferences.maxBudget === undefined ? "" : String(preferences.maxBudget)
   ];
 
   while (fields.length > 0 && fields[fields.length - 1] === "") {
@@ -225,7 +234,8 @@ const decodeCompactSharedState = (value: string): SharedSearchState | null => {
         defaultPreferences.minDurability
       ),
       minDuration: numberOrDefault(fields[10], defaultPreferences.minDuration),
-      minCharges: numberOrDefault(fields[11], defaultPreferences.minCharges)
+      minCharges: numberOrDefault(fields[11], defaultPreferences.minCharges),
+      maxBudget: fields[12] === undefined ? undefined : numberOrDefault(fields[12], 0)
     })
   };
 };
@@ -263,6 +273,67 @@ const formatNumber = (value: number, digits = 0) =>
     minimumFractionDigits: 0
   }).format(value);
 
+const emeraldUnitValues = {
+  stx: 64 * 64 * 64,
+  le: 64 * 64,
+  eb: 64,
+  e: 1
+} as const;
+
+const parseEmeraldBudget = (value: string): number | null | undefined => {
+  const normalized = value.toLowerCase().replace(/,/g, "").trim();
+  if (!normalized) return undefined;
+
+  const matches = normalized.matchAll(/(\d+(?:\.\d+)?)\s*(stx|le|eb|e)\b/g);
+  let consumed = 0;
+  let total = 0;
+  let found = false;
+
+  for (const match of matches) {
+    if (normalized.slice(consumed, match.index).trim()) return null;
+    total += Number(match[1]) * emeraldUnitValues[match[2] as keyof typeof emeraldUnitValues];
+    consumed = (match.index ?? 0) + match[0].length;
+    found = true;
+  }
+
+  if (!found) {
+    if (!/^\d+(?:\.\d+)?$/.test(normalized)) return null;
+    total = Number(normalized);
+  } else if (normalized.slice(consumed).trim()) {
+    return null;
+  }
+
+  return Number.isFinite(total) && total >= 0 ? Math.round(total) : null;
+};
+
+const formatEmeraldBudget = (value?: number) =>
+  value === undefined ? "" : `${formatNumber(value)}e`;
+
+const formatEmeralds = (value: number) => {
+  if (!Number.isFinite(value)) return "Unknown";
+
+  const sign = value < 0 ? "-" : "";
+  let remaining = Math.round(Math.abs(value) * 100) / 100;
+  const parts: string[] = [];
+
+  (Object.entries(emeraldUnitValues) as [keyof typeof emeraldUnitValues, number][]).forEach(
+    ([unit, unitValue]) => {
+      if (unit === "e") return;
+      const amount = Math.floor(remaining / unitValue);
+      if (amount > 0) {
+        parts.push(`${amount}${unit}`);
+        remaining -= amount * unitValue;
+      }
+    }
+  );
+
+  if (remaining > 0 || parts.length === 0) {
+    parts.push(`${formatNumber(remaining, 2)}e`);
+  }
+
+  return `${sign}${parts.join(" ")}`;
+};
+
 type CraftCostInput = {
   name: string;
   amount: number;
@@ -292,6 +363,33 @@ const craftCostInputs = (craft: SolvedCraft): CraftCostInput[] => {
   });
 
   return Array.from(inputs.values()).sort((left, right) => left.name.localeCompare(right.name));
+};
+
+const craftMarketCost = (
+  craft: SolvedCraft,
+  priceCache: WynnventoryPriceCache | null
+) => {
+  if (!priceCache?.generatedAt) return null;
+
+  return craftCostInputs(craft).reduce<number | null>((total, input) => {
+    const price = priceCache.prices[input.marketKey];
+    if (total === null || price === undefined) return null;
+    return total + price.price * input.amount;
+  }, 0);
+};
+
+const filterIngredientsByBudget = (
+  ingredients: WynncraftIngredient[],
+  maxBudget: number | undefined,
+  priceCache: WynnventoryPriceCache | null
+) => {
+  if (maxBudget === undefined) return ingredients;
+  if (!priceCache?.generatedAt) return [];
+
+  return ingredients.filter((ingredient) => {
+    const price = priceCache.prices[ingredient.displayName]?.price;
+    return price !== undefined && price <= maxBudget;
+  });
 };
 
 const getRecipeTypes = (recipes: WynncraftRecipe[], profession: Profession) =>
@@ -916,12 +1014,25 @@ const savedRecipeSummary = (craft: SolvedCraft) => {
 function ResultsList({
   results,
   selected,
-  onSelect
+  onSelect,
+  priceCache
 }: {
   results: SolvedCraft[];
   selected: string | null;
   onSelect: (internalName: string) => void;
+  priceCache: WynnventoryPriceCache | null;
 }) {
+  const resultsPerPage = 8;
+  const [page, setPage] = useState(0);
+  const pageCount = Math.ceil(results.length / resultsPerPage);
+  const selectedIndex = results.findIndex(
+    (result) => craftSelectionKey(result) === selected
+  );
+
+  useEffect(() => {
+    setPage(selectedIndex >= 0 ? Math.floor(selectedIndex / resultsPerPage) : 0);
+  }, [results, resultsPerPage, selectedIndex]);
+
   if (!results.length) {
     return (
       <div className="emptyState">
@@ -931,31 +1042,74 @@ function ResultsList({
     );
   }
 
+  const currentPage = Math.min(page, Math.max(0, pageCount - 1));
+  const firstResult = currentPage * resultsPerPage;
+  const pagedResults = results.slice(firstResult, firstResult + resultsPerPage);
+
   return (
-    <div className="resultList">
-      {results.map((result) => (
-        <button
-          type="button"
-          key={craftSelectionKey(result)}
-          className={clsx(
-            "resultCard",
-            selected === craftSelectionKey(result) && "resultCardSelected"
-          )}
-          onClick={() => onSelect(craftSelectionKey(result))}
-        >
-          <div>
-            <span className="resultType">{titleCase(result.recipe.type)}</span>
-            <strong>
-              Level {result.recipe.level.minimum}-{result.recipe.level.maximum}
-            </strong>
-            <FinalStatsPreview craft={result} />
-          </div>
-          <div className={clsx("scoreBadge", scoreTone(result.score))}>
-            {formatNumber(result.score)}
-          </div>
-        </button>
-      ))}
-    </div>
+    <>
+      {pageCount > 1 && (
+        <nav className="resultPagination" aria-label="Recipe result pages">
+          <button
+            type="button"
+            className="paginationButton"
+            disabled={currentPage === 0}
+            onClick={() => setPage((value) => Math.max(0, value - 1))}
+            title="Previous results"
+            aria-label="Previous results"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span>
+            {firstResult + 1}-{Math.min(firstResult + resultsPerPage, results.length)} of{" "}
+            {results.length}
+          </span>
+          <button
+            type="button"
+            className="paginationButton"
+            disabled={currentPage === pageCount - 1}
+            onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}
+            title="Next results"
+            aria-label="Next results"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </nav>
+      )}
+      <div className="resultList">
+        {pagedResults.map((result) => {
+          const cost = craftMarketCost(result, priceCache);
+
+          return (
+            <button
+              type="button"
+              key={craftSelectionKey(result)}
+              className={clsx(
+                "resultCard",
+                selected === craftSelectionKey(result) && "resultCardSelected"
+              )}
+              onClick={() => onSelect(craftSelectionKey(result))}
+            >
+              <div>
+                <span className="resultType">{titleCase(result.recipe.type)}</span>
+                <strong>
+                  Level {result.recipe.level.minimum}-{result.recipe.level.maximum}
+                </strong>
+                <FinalStatsPreview craft={result} />
+              </div>
+              <div className="resultCardAside">
+                {cost !== null && (
+                  <span className="costBadge">{formatEmeralds(cost)}</span>
+                )}
+                <div className={clsx("scoreBadge", scoreTone(result.score))}>
+                  {formatNumber(result.score)}
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -1198,26 +1352,14 @@ function IngredientStats({
   );
 }
 
-function MarketCost({ craft }: { craft: SolvedCraft }) {
-  const [priceCache, setPriceCache] = useState<WynnventoryPriceCache | null>(null);
-  const [priceError, setPriceError] = useState(false);
+function MarketCost({
+  craft,
+  priceCache
+}: {
+  craft: SolvedCraft;
+  priceCache: WynnventoryPriceCache | null;
+}) {
   const inputs = useMemo(() => craftCostInputs(craft), [craft]);
-
-  useEffect(() => {
-    let mounted = true;
-
-    fetchMarketPriceCache()
-      .then((cache) => {
-        if (mounted) setPriceCache(cache);
-      })
-      .catch(() => {
-        if (mounted) setPriceError(true);
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const pricedInputs = inputs.map((input) => {
     const price = priceCache?.prices[input.marketKey];
@@ -1241,12 +1383,11 @@ function MarketCost({ craft }: { craft: SolvedCraft }) {
           <h3>Craft cost</h3>
         </div>
         {priceCache?.generatedAt && (
-          <strong className="marketCostTotal">{formatNumber(knownCost)} emeralds</strong>
+          <strong className="marketCostTotal">{formatEmeralds(knownCost)}</strong>
         )}
       </div>
 
-      {!priceCache && !priceError && <p>Loading market price cache...</p>}
-      {priceError && <p>Market price cache could not be loaded.</p>}
+      {!priceCache && <p>Loading market price cache...</p>}
       {priceCache && !priceCache.generatedAt && (
         <p>Market price cache has not been generated yet.</p>
       )}
@@ -1260,7 +1401,8 @@ function MarketCost({ craft }: { craft: SolvedCraft }) {
                 </span>
                 {input.price ? (
                   <strong>
-                    {formatNumber(input.total ?? 0)} <small>(median {formatNumber(input.price.price)})</small>
+                    {formatEmeralds(input.total ?? 0)}{" "}
+                    <small>(median {formatEmeralds(input.price.price)})</small>
                   </strong>
                 ) : (
                   <strong className="marketUnavailable">No price</strong>
@@ -1282,12 +1424,14 @@ function Workbench({
   craft,
   shareUrl,
   saved,
-  onSave
+  onSave,
+  priceCache
 }: {
   craft: SolvedCraft;
   shareUrl: string;
   saved: boolean;
   onSave: () => void;
+  priceCache: WynnventoryPriceCache | null;
 }) {
   const baseDurability = estimatedRecipeDurabilityRange(craft.recipe);
   const finalDurability = clampRangeMin(addFlatToRange(baseDurability, craft.durabilityDelta));
@@ -1400,7 +1544,7 @@ function Workbench({
           )}
         </div>
       </div>
-      <MarketCost craft={craft} />
+      <MarketCost craft={craft} priceCache={priceCache} />
     </section>
   );
 }
@@ -1512,7 +1656,11 @@ function SidebarFilters({
   setMaxLevel: (level: number) => void;
   preferences: SolverPreferences;
   setPreferences: (preferences: SolverPreferences) => void;
-  onSearch: (minLevel: number, maxLevel: number) => void;
+  onSearch: (
+    minLevel: number,
+    maxLevel: number,
+    preferences?: SolverPreferences
+  ) => void;
   hasPendingChanges: boolean;
 }) {
   const recipeTypes = getRecipeTypes(recipes, profession);
@@ -1525,6 +1673,7 @@ function SidebarFilters({
   const [avoidIdsOpen, setAvoidIdsOpen] = useState(false);
   const [minLevelInput, setMinLevelInput] = useState(String(minLevel));
   const [maxLevelInput, setMaxLevelInput] = useState(String(maxLevel));
+  const [budgetInput, setBudgetInput] = useState(formatEmeraldBudget(preferences.maxBudget));
 
   useEffect(() => {
     setMinLevelInput(String(minLevel));
@@ -1533,6 +1682,10 @@ function SidebarFilters({
   useEffect(() => {
     setMaxLevelInput(String(maxLevel));
   }, [maxLevel]);
+
+  useEffect(() => {
+    setBudgetInput(formatEmeraldBudget(preferences.maxBudget));
+  }, [preferences.maxBudget]);
 
   const normalizeLevel = (value: string, fallback: number) => {
     const parsed = Number(value);
@@ -1543,11 +1696,16 @@ function SidebarFilters({
   const submitSearch = () => {
     const nextMinLevel = normalizeLevel(minLevelInput, minLevel);
     const nextMaxLevel = normalizeLevel(maxLevelInput, maxLevel);
+    const parsedBudget = parseEmeraldBudget(budgetInput);
+    const nextBudget = parsedBudget === null ? preferences.maxBudget : parsedBudget;
+    const nextPreferences = { ...preferences, maxBudget: nextBudget };
     setMinLevelInput(String(nextMinLevel));
     setMaxLevelInput(String(nextMaxLevel));
+    setBudgetInput(formatEmeraldBudget(nextBudget));
     setMinLevel(nextMinLevel);
     setMaxLevel(nextMaxLevel);
-    onSearch(nextMinLevel, nextMaxLevel);
+    setPreferences(nextPreferences);
+    onSearch(nextMinLevel, nextMaxLevel, nextPreferences);
   };
 
   const matchingIds = (query: string) => {
@@ -1670,6 +1828,18 @@ function SidebarFilters({
           }
           placeholder={"One per line, or comma separated"}
           rows={4}
+        />
+      </div>
+
+      <div className="controlGroup">
+        <label htmlFor="max-budget">Max budget</label>
+        <input
+          id="max-budget"
+          className={clsx(parseEmeraldBudget(budgetInput) === null && "inputInvalid")}
+          value={budgetInput}
+          onChange={(event) => setBudgetInput(event.target.value)}
+          placeholder="e.g. 1.5stx or 32eb 10e"
+          inputMode="text"
         />
       </div>
 
@@ -1804,6 +1974,7 @@ export default function WynncrafterApp() {
   const [recipes, setRecipes] = useState<WynncraftRecipe[]>([]);
   const [ingredients, setIngredients] = useState<WynncraftIngredient[]>([]);
   const [utilityIngredients, setUtilityIngredients] = useState<WynncraftIngredient[]>([]);
+  const [marketPriceCache, setMarketPriceCache] = useState<WynnventoryPriceCache | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draftProfession, setDraftProfession] = useState<Profession>("armouring");
@@ -1881,12 +2052,13 @@ export default function WynncrafterApp() {
     setUrlHydrated(true);
 
     let mounted = true;
-    Promise.all([fetchRecipes(), fetchIngredientData()])
-      .then(([recipeData, ingredientData]) => {
+    Promise.all([fetchRecipes(), fetchIngredientData(), fetchMarketPriceCache()])
+      .then(([recipeData, ingredientData, marketPrices]) => {
         if (!mounted) return;
         setRecipes(recipeData);
         setIngredients(ingredientData.ingredients);
         setUtilityIngredients(ingredientData.utilityIngredients);
+        setMarketPriceCache(marketPrices);
         const initialType = getRecipeTypes(recipeData, "armouring")[0] ?? "helmet";
         if (!sharedState) {
           setDraftCraftedType(initialType);
@@ -1928,14 +2100,18 @@ export default function WynncrafterApp() {
     ]
   );
 
-  const applySearch = (minLevel = draftMinLevel, maxLevel = draftMaxLevel) => {
+  const applySearch = (
+    minLevel = draftMinLevel,
+    maxLevel = draftMaxLevel,
+    preferences = draftPreferences
+  ) => {
     setDraftMinLevel(minLevel);
     setDraftMaxLevel(maxLevel);
     setSearchedProfession(draftProfession);
     setSearchedCraftedType(draftCraftedType);
     setSearchedMinLevel(minLevel);
     setSearchedMaxLevel(maxLevel);
-    setSearchedPreferences(draftPreferences);
+    setSearchedPreferences(preferences);
     setSelectedRecipe(null);
   };
 
@@ -1965,10 +2141,50 @@ export default function WynncrafterApp() {
     [draftCraftedType, draftMaxLevel, draftMinLevel, draftProfession, recipes]
   );
 
+  const draftBudgetIngredients = useMemo(
+    () =>
+      filterIngredientsByBudget(
+        ingredients,
+        draftPreferences.maxBudget,
+        marketPriceCache
+      ),
+    [draftPreferences.maxBudget, ingredients, marketPriceCache]
+  );
+
+  const searchedBudgetIngredients = useMemo(
+    () =>
+      filterIngredientsByBudget(
+        ingredients,
+        searchedPreferences.maxBudget,
+        marketPriceCache
+      ),
+    [ingredients, marketPriceCache, searchedPreferences.maxBudget]
+  );
+
+  const draftBudgetUtilityIngredients = useMemo(
+    () =>
+      filterIngredientsByBudget(
+        utilityIngredients,
+        draftPreferences.maxBudget,
+        marketPriceCache
+      ),
+    [draftPreferences.maxBudget, marketPriceCache, utilityIngredients]
+  );
+
+  const searchedBudgetUtilityIngredients = useMemo(
+    () =>
+      filterIngredientsByBudget(
+        utilityIngredients,
+        searchedPreferences.maxBudget,
+        marketPriceCache
+      ),
+    [marketPriceCache, searchedPreferences.maxBudget, utilityIngredients]
+  );
+
   useEffect(() => {
     if (
       loading ||
-      !ingredients.length ||
+      !draftBudgetIngredients.length ||
       !draftPreferences.targetIds.length ||
       typeof window === "undefined"
     ) {
@@ -2011,8 +2227,8 @@ export default function WynncrafterApp() {
 
       if (work.kind === "prepare") {
         precomputeTargetSearch(
-          ingredients,
-          utilityIngredients,
+          draftBudgetIngredients,
+          draftBudgetUtilityIngredients,
           draftProfession,
           work.maxIngredientLevel,
           draftPreferences
@@ -2020,9 +2236,9 @@ export default function WynncrafterApp() {
       } else {
         precomputeRecipeSearch(
           work.recipe,
-          ingredients,
+          draftBudgetIngredients,
           draftPreferences,
-          utilityIngredients
+          draftBudgetUtilityIngredients
         );
       }
 
@@ -2053,9 +2269,9 @@ export default function WynncrafterApp() {
     draftMinLevel,
     draftPreferences,
     draftProfession,
-    ingredients,
+    draftBudgetIngredients,
+    draftBudgetUtilityIngredients,
     loading,
-    utilityIngredients
   ]);
 
   const solvedRecipes = useMemo(
@@ -2063,10 +2279,20 @@ export default function WynncrafterApp() {
       const solverPreferences = searchedPreferences;
       const solved = matchingRecipes
         .flatMap((recipe) =>
-          solveRecipe(recipe, ingredients, solverPreferences, utilityIngredients)
+          solveRecipe(
+            recipe,
+            searchedBudgetIngredients,
+            solverPreferences,
+            searchedBudgetUtilityIngredients
+          )
         )
         .map((craft) => withMaterialPlan(craft, matchingRecipes, searchedPreferences))
-        .filter((craft): craft is SolvedCraft => Boolean(craft));
+        .filter((craft): craft is SolvedCraft => Boolean(craft))
+        .filter((craft) => {
+          if (searchedPreferences.maxBudget === undefined) return true;
+          const cost = craftMarketCost(craft, marketPriceCache);
+          return cost !== null && cost <= searchedPreferences.maxBudget;
+        });
       const deduped = dedupeByLayoutKeepingLowestLevel(solved).filter((craft) =>
         hasSelectedTarget(craft, searchedPreferences.targetIds)
       );
@@ -2094,7 +2320,14 @@ export default function WynncrafterApp() {
         })
         .slice(0, 48);
     },
-    [ingredients, matchingRecipes, searchedPreferences, searchedMaxLevel, utilityIngredients]
+    [
+      marketPriceCache,
+      matchingRecipes,
+      searchedBudgetIngredients,
+      searchedMaxLevel,
+      searchedPreferences,
+      searchedBudgetUtilityIngredients
+    ]
   );
 
   const selectedCraft = useMemo(() => {
@@ -2245,6 +2478,7 @@ export default function WynncrafterApp() {
                 results={solvedRecipes}
                 selected={selectedCraft ? craftSelectionKey(selectedCraft) : null}
                 onSelect={setSelectedRecipe}
+                priceCache={marketPriceCache}
               />
             </section>
 
@@ -2256,6 +2490,7 @@ export default function WynncrafterApp() {
                     shareUrl={shareUrl}
                     saved={selectedRecipeSaved}
                     onSave={saveSelectedRecipe}
+                    priceCache={marketPriceCache}
                   />
                   <DetailPanel craft={selectedCraft} />
                   <p className="sourceNote">

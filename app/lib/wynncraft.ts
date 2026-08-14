@@ -165,6 +165,7 @@ export type SolverPreferences = {
   minDurability: number;
   minDuration: number;
   minCharges: number;
+  maxBudget?: number;
   maxIngredientLevel?: number;
 };
 
@@ -1208,6 +1209,7 @@ const solvedRecipeKey = (recipe: WynncraftRecipe, preferences: SolverPreferences
     preferences.minDurability,
     preferences.minDuration,
     preferences.minCharges,
+    preferences.maxBudget,
     preferences.maxIngredientLevel,
     preferences.maxIngredients,
     preferences.includeTradeoffs
