@@ -573,7 +573,7 @@ p {
 h1 {
   max-width: 780px;
   margin-bottom: 0;
-  font-size: clamp(2rem, 4vw, 4.4rem);
+  font-size: clamp(2rem, 3.4vw, 3.8rem);
   line-height: 0.98;
 }
 
@@ -636,7 +636,7 @@ h3 {
 
 .contentGrid {
   display: grid;
-  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(520px, 0.9fr) minmax(0, 1.35fr);
   gap: 18px;
   align-items: start;
 }
@@ -687,6 +687,7 @@ h3 {
 
 .resultList {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 9px;
   max-height: calc(100vh - 190px);
   overflow-y: auto;
@@ -1355,6 +1356,16 @@ h3 {
 
   .resultList {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: none;
+  }
+}
+
+@media (max-width: 1450px) {
+  .contentGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .resultList {
     max-height: none;
   }
 }
