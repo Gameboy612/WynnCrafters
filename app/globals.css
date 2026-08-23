@@ -994,6 +994,26 @@ h3 {
   overflow-y: auto;
 }
 
+.swapFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.swapFilters label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.swapFilters input {
+  accent-color: var(--teal);
+}
+
 .swapOption {
   min-width: 0;
   border: 1px solid var(--line);
@@ -1010,23 +1030,38 @@ h3 {
   background: #e1f1ed;
 }
 
-.swapOption span,
-.swapOption small {
+.swapOption > span,
+.swapOption > small {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.swapOption span {
+.swapOption > span {
   font-size: 0.78rem;
   font-weight: 800;
 }
 
-.swapOption small {
+.swapOption > small {
   margin-top: 3px;
   color: var(--muted);
   font-size: 0.7rem;
+}
+
+.swapOption .ingredientStats {
+  margin-top: 7px;
+  gap: 4px;
+}
+
+.swapOption .ingredientStat {
+  min-height: 19px;
+  padding: 3px 5px;
+  font-size: 0.68rem;
+}
+
+.swapOption .ingredientStat strong {
+  font-size: 0.68rem;
 }
 
 .statsPanel {
@@ -1246,6 +1281,36 @@ h3 {
 .materialSwapButton:hover span,
 .materialSwapButtonSelected span {
   color: #8a5b00;
+}
+
+.materialLevelPicker {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.materialLevelPicker select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-strong);
+  color: var(--ink);
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.materialLevelPicker select:focus-visible {
+  outline: 2px solid #b88419;
+  outline-offset: 2px;
 }
 
 .materialTierOptions {

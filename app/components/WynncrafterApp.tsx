@@ -1490,6 +1490,10 @@ function Workbench({
 }) {
   const [swapSlot, setSwapSlot] = useState<number | null>(null);
   const [swapQuery, setSwapQuery] = useState("");
+  const [swapStatQuery, setSwapStatQuery] = useState("");
+  const [swapPositiveDurability, setSwapPositiveDurability] = useState(false);
+  const [swapPositiveCharges, setSwapPositiveCharges] = useState(false);
+  const [swapTargetOnly, setSwapTargetOnly] = useState(false);
   const baseDurability = estimatedRecipeDurabilityRange(craft.recipe);
   const finalDurability = clampRangeMin(addFlatToRange(baseDurability, craft.durabilityDelta));
   const baseDuration = recipeRange(craft.recipe.duration);
@@ -1499,17 +1503,39 @@ function Workbench({
     baseHealthOrDamage.min !== 0 || baseHealthOrDamage.max !== 0;
   const swapOptions = useMemo(() => {
     const normalizedQuery = swapQuery.trim().toLowerCase();
+    const normalizedStatQuery = swapStatQuery.trim().toLowerCase();
+    const targetIds = craft.positives.map((item) => item.id);
 
     return swapIngredients
       .filter((ingredient) =>
         !normalizedQuery ||
         ingredient.displayName.toLowerCase().includes(normalizedQuery)
       )
+      .filter((ingredient) =>
+        !swapPositiveDurability || (ingredient.itemOnlyIDs?.durabilityModifier ?? 0) > 0
+      )
+      .filter((ingredient) =>
+        !swapPositiveCharges || (ingredient.consumableOnlyIDs?.charges ?? 0) > 0
+      )
+      .filter((ingredient) => {
+        const ids = Object.keys(ingredient.identifications ?? {});
+        const statLabels = [
+          ...ids.map((id) => idLabel(id)),
+          ...(supportsDurability(craft.recipe) ? ["Durability"] : []),
+          ...(supportsConsumableStats(craft.recipe) ? ["Charges", "Duration"] : [])
+        ];
+        if (swapTargetOnly && !ids.some((id) => targetIds.includes(id))) return false;
+        return (
+          !normalizedStatQuery ||
+          statLabels.some((label) => label.toLowerCase().includes(normalizedStatQuery))
+        );
+      })
       .slice(0, normalizedQuery ? 48 : 18);
-  }, [swapIngredients, swapQuery]);
+  }, [craft.positives, swapIngredients, swapPositiveCharges, swapPositiveDurability, swapQuery, swapStatQuery, swapTargetOnly]);
 
   useEffect(() => {
     setSwapQuery("");
+    setSwapStatQuery("");
   }, [swapSlot]);
 
   return (
@@ -1643,6 +1669,41 @@ function Workbench({
               autoFocus
             />
           </div>
+          <div className="swapFilters" aria-label="Swap ingredient filters">
+            <label>
+              <input
+                type="checkbox"
+                checked={swapPositiveDurability}
+                onChange={(event) => setSwapPositiveDurability(event.target.checked)}
+              />
+              Positive durability
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={swapPositiveCharges}
+                onChange={(event) => setSwapPositiveCharges(event.target.checked)}
+              />
+              Positive charges
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={swapTargetOnly}
+                onChange={(event) => setSwapTargetOnly(event.target.checked)}
+              />
+              Target IDs only
+            </label>
+          </div>
+          <div className="inputWithIcon">
+            <Search size={15} />
+            <input
+              value={swapStatQuery}
+              onChange={(event) => setSwapStatQuery(event.target.value)}
+              placeholder="Filter by stat, e.g. health"
+              aria-label="Filter swap ingredients by stat"
+            />
+          </div>
           <div className="swapOptions">
             <button
               type="button"
@@ -1654,7 +1715,7 @@ function Workbench({
             >
               Clear slot
             </button>
-            {swapOptions.map((ingredient) => (
+            {swapOptions.map((ingredient, optionIndex) => (
               <button
                 type="button"
                 className={clsx(
@@ -1662,7 +1723,7 @@ function Workbench({
                   craft.grid[swapSlot]?.internalName === ingredient.internalName &&
                     "swapOptionSelected"
                 )}
-                key={ingredient.internalName}
+                key={`${ingredient.internalName}-${optionIndex}`}
                 onClick={() => {
                   onSwapIngredient(swapSlot, ingredient);
                   setSwapSlot(null);
@@ -1672,6 +1733,12 @@ function Workbench({
                 <small>
                   Lv {ingredient.requirements?.level ?? 1} - {tierLabel(ingredient.tier)}
                 </small>
+                <IngredientStats
+                  ingredient={ingredient}
+                  effectiveness={craft.effectiveness[swapSlot] ?? 100}
+                  recipe={craft.recipe}
+                  targetIds={craft.positives.map((item) => item.id)}
+                />
               </button>
             ))}
           </div>
@@ -1691,12 +1758,23 @@ function Workbench({
 
 function DetailPanel({
   craft,
+  materialRecipes,
+  onMaterialLevelChange,
   onMaterialTierChange
 }: {
   craft: SolvedCraft;
+  materialRecipes: WynncraftRecipe[];
+  onMaterialLevelChange: (recipeInternalName: string) => void;
   onMaterialTierChange: (materialName: string, tier: 1 | 2 | 3) => void;
 }) {
   const [activeMaterial, setActiveMaterial] = useState<string | null>(null);
+  const materialLevelOptions = useMemo(
+    () =>
+      materialRecipes
+        .filter((recipe) => recipe.skill === craft.recipe.skill && recipe.type === craft.recipe.type)
+        .sort((left, right) => left.level.minimum - right.level.minimum),
+    [craft.recipe.skill, craft.recipe.type, materialRecipes]
+  );
   const requirements = Object.entries(craft.requirements).filter(([, value]) => value !== 0);
   const targetedIds = new Set(craft.positives.map((item) => item.id));
   const craftedStats = Object.entries(craft.ids)
@@ -1757,6 +1835,21 @@ function DetailPanel({
 
       <div className="detailColumn">
         <h3>Materials</h3>
+        {materialLevelOptions.length > 0 && (
+          <label className="materialLevelPicker">
+            <span>Material level</span>
+            <select
+              value={craft.materialPlan?.sourceRecipeInternalName ?? craft.recipe.internalName}
+              onChange={(event) => onMaterialLevelChange(event.target.value)}
+            >
+              {materialLevelOptions.map((recipe) => (
+                <option key={recipe.internalName} value={recipe.internalName}>
+                  {recipe.level.minimum}-{recipe.level.maximum}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="statList">
           {craft.recipe.materials.map((material) => (
             <div key={material.item}>
@@ -2758,6 +2851,48 @@ export default function WynncrafterApp() {
     );
   };
 
+  const updateManualMaterialLevel = (recipeInternalName: string) => {
+    if (!selectedCraft) return;
+
+    const sourceRecipe = recipes.find((recipe) => recipe.internalName === recipeInternalName);
+    if (!sourceRecipe) return;
+
+    const currentPlan = selectedCraft.materialPlan;
+    const tiers = sourceRecipe.materials.map((material, index) => ({
+      ...material,
+      tier: currentPlan?.tiers[index]?.tier ?? 1
+    })) as Array<{
+      item: string;
+      amount: number;
+      tier: 1 | 2 | 3;
+    }>;
+    const totalMaterialAmount = tiers.reduce((total, material) => total + material.amount, 0);
+    const utilityBoostPercent = tiers.reduce(
+      (total, material) =>
+        total +
+        (material.amount / totalMaterialAmount) *
+          (materialTierBoosts.default[material.tier - 1] ?? 0),
+      0
+    );
+    const materialPlan = {
+      sourceRecipeInternalName: sourceRecipe.internalName,
+      sourceLevel: sourceRecipe.level,
+      utilityBoostPercent,
+      upgradedByLevel: sourceRecipe.internalName !== selectedCraft.recipe.internalName,
+      upgradedByTier: tiers.some((material) => material.tier > 1),
+      tiers
+    };
+    const recipe = applyMaterialPlanToRecipe(
+      sourceRecipe,
+      materialPlan,
+      selectedCraft.grid.some((entry) => Boolean(entry))
+    );
+
+    setManualCraft(
+      rebuildManualCraft(selectedCraft, selectedCraft.grid, recipe, materialPlan)
+    );
+  };
+
   const selectRecipe = (key: string) => {
     setManualCraft(null);
     setSelectedRecipe(key);
@@ -2925,6 +3060,8 @@ export default function WynncrafterApp() {
                   />
                   <DetailPanel
                     craft={selectedCraft}
+                    materialRecipes={matchingRecipes}
+                    onMaterialLevelChange={updateManualMaterialLevel}
                     onMaterialTierChange={updateManualMaterialTier}
                   />
                   <p className="sourceNote">
